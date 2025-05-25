@@ -27,6 +27,7 @@ public class CPU {
     private boolean ime; // Interrupt Master Enable
     private boolean halted;
     private int cycles = 0; // Ciclos da instrução atual
+    private int divAccumulator = 0;
 
     public CPU(MMU mmu) {
         this.mmu = mmu;
@@ -39,33 +40,47 @@ public class CPU {
         d = 0x00; e = 0xD8;
         h = 0x01; l = 0x4D;
         sp = 0xFFFE;
-        pc = 0x0100; // Ponto de entrada da ROM do cartucho
+        pc = 0x0100; // Ponto de ent
+        cycles = 0;
         ime = false;
         halted = false;
-        cycles = 0;
+        divAccumulator = 0;
         System.out.println("CPU reset. PC=" + String.format("0x%04X", pc));
     }
 
     public int step() {
         cycles = 0;
+        int executedCyclesThisStep = 0;
+
         if (halted) {
-            cycles = 4;
-            // handleInterrupts() cuidará de tirar do HALT se uma interrupção ocorrer
-            return cycles;
+            executedCyclesThisStep = 4; // HALT consome ciclos como um NOP
+        } else {
+            // int currentPc = pc; // Para depuração
+            int opcode = fetch();
+            decodeAndExecute(opcode); // Este método define this.cycles
+            executedCyclesThisStep = this.cycles; // Captura os ciclos da instrução executada
         }
+
+        // --- LÓGICA DE INCREMENTO DO DIV ---
+        divAccumulator += executedCyclesThisStep; // Acumula T-cycles
+        if (divAccumulator >= 256) {
+            divAccumulator -= 256; // Subtrai o período do DIV
+            mmu.incrementDivRegister(); // Chama o novo método na MMU
+        }
+        // -----------------------------------
 
         int currentPc = pc; // Para depuração
         int opcode = fetch();
         // Descomente para depuração pesada de opcodes:
-        // System.out.println(String.format("PC:0x%04X Op:0x%02X AF:%02X%02X BC:%02X%02X DE:%02X%02X HL:%02X%02X SP:0x%04X IME:%b Z:%d N:%d H:%d C:%d IF:0x%02X IE:0x%02X LCDC:0x%02X LY:0x%02X STAT:0x%02X",
-        //         currentPc, opcode, a,f, b,c, d,e, h,l, sp, ime,
-        //         getZeroFlag()?1:0, getSubtractFlag()?1:0, getHalfCarryFlag()?1:0, getCarryFlag()?1:0,
-        //         mmu.readByte(MMU.REG_IF), mmu.readByte(MMU.REG_IE),
-        //         mmu.readByte(MMU.REG_LCDC), mmu.readByte(MMU.REG_LY), mmu.readByte(MMU.REG_STAT) ));
+        /*System.out.println(String.format("PC:0x%04X Op:0x%02X AF:%02X%02X BC:%02X%02X DE:%02X%02X HL:%02X%02X SP:0x%04X IME:%b Z:%d N:%d H:%d C:%d IF:0x%02X IE:0x%02X LCDC:0x%02X LY:0x%02X STAT:0x%02X",
+                 currentPc, opcode, a,f, b,c, d,e, h,l, sp, ime,
+                 getZeroFlag()?1:0, getSubtractFlag()?1:0, getHalfCarryFlag()?1:0, getCarryFlag()?1:0,
+                 mmu.readByte(MMU.REG_IF), mmu.readByte(MMU.REG_IE),
+                 mmu.readByte(MMU.REG_LCDC), mmu.readByte(MMU.REG_LY), mmu.readByte(MMU.REG_STAT) ));*/
 
         decodeAndExecute(opcode);
 
-        return cycles;
+        return executedCyclesThisStep;
     }
 
     private int fetch() {
@@ -1078,7 +1093,6 @@ public class CPU {
         }
 
         ime = false;
-        cycles = 0;
 
 
         if ((requestedAndEnabled & 0x01) != 0) { // VBlank (Bit 0, highest priority)

@@ -102,6 +102,15 @@ public class MMU {
         System.out.println("MMU reset and I/O registers initialized.");
     }
 
+    // --- NOVO MÉTODO PARA A CPU CHAMAR ---
+    /**
+     * Incrementa o registrador DIV (0xFF04).
+     * Este método deve ser chamado pela CPU a cada 256 T-cycles.
+     */
+    public void incrementDivRegister() {
+        memory[REG_DIV]++; // Simplesmente incrementa o byte. Ele vai dar a volta (overflow) naturalmente.
+    }
+
     public void loadCartridge(Cartridge cart) {
         this.cartridge = cart;
         // Copia os primeiros 32KB da ROM para a memória.
@@ -205,9 +214,10 @@ public class MMU {
             case REG_SB: return memory[REG_SB] & 0xFF;
             case REG_SC: return memory[REG_SC] & 0xFF; // Implementar serial pode modificar isso
 
-            case REG_DIV:  return 0; // TODO: Implementar Timer - DIV é resetado na escrita
-            case REG_TIMA: return 0; // TODO: Implementar Timer
-            case REG_TMA:  return 0; // TODO: Implementar Timer
+            case REG_DIV:  return memory[REG_DIV] & 0xFF; // Lê o valor atual do DIV
+            // ---------------------
+            case REG_TIMA: return memory[REG_TIMA] & 0xFF; // TODO: Implementar Timer
+            case REG_TMA:  return memory[REG_TMA] & 0xFF; // TODO: Implementar Timer
             case REG_TAC:  return memory[REG_TAC] & 0xFF; // TODO: Implementar Timer
 
             case REG_IF: return memory[REG_IF] & 0xFF;
@@ -262,7 +272,20 @@ public class MMU {
     }
 
     private void writeIORegister(int address, byte value) {
-        memory[address] = value; // Armazena o valor bruto para alguns casos
+
+        // Tratar REG_DIV primeiro por causa do seu comportamento especial de escrita
+        if (address == REG_DIV) {
+            memory[REG_DIV] = 0; // Qualquer escrita reseta DIV para 0
+            // TODO: Idealmente, isso também resetaria o acumulador de ciclos do DIV na CPU.
+            //       Ex: if (cpu != null) cpu.resetDivAccumulator();
+            //       Por ora, a CPU continuará acumulando, o que é um pequeno bug de timing
+            //       após um reset do DIV, mas o incremento e o reset por escrita funcionarão.
+            return; // Importante para não executar o memory[address] = value abaixo para DIV.
+        }
+
+        // Armazena o valor bruto para a maioria dos outros casos,
+        // mas o switch abaixo pode ter lógica mais específica.
+        memory[address] = value;
 
         switch (address) {
             case REG_JOYP: // Joypad - Bits 4 e 5 são escrevíveis (seleção de linha)
@@ -315,7 +338,7 @@ public class MMU {
                 break;
             case int n when (n >= 0xFF30 && n <= 0xFF3F):
                 // Wave Pattern RAM é diretamente endereçável
-                memory[n] = value; // Ou apu.writeWaveRam(address - 0xFF30, value);
+                apu.writeRegister(address, value);
                 break;
 
             // TODO: Outros registradores de I/O (bootstrap ROM disable, speed switch CGB, etc.)
