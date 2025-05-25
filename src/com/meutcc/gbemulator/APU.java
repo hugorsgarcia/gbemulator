@@ -37,6 +37,7 @@ public class APU {
     private int apuCycleAccumulator = 0;       // Accumulates CPU cycles for sample generation
     private int frameSequencerCycleCounter = 0; // Accumulates CPU cycles for Frame Sequencer
     private int frameSequencerStep = 0;
+    private volatile boolean emulatorSoundGloballyEnabled = true;
 
     // --- Channels ---
     private final PulseChannel channel1;
@@ -67,6 +68,17 @@ public class APU {
 
         initializeSoundAPI();
         reset();
+    }
+
+    public void setEmulatorSoundGloballyEnabled(boolean enabled) {
+        this.emulatorSoundGloballyEnabled = enabled;
+        if (!enabled && javaSoundInitialized && sourceDataLine != null) {
+            // Opcional: Limpar o buffer de som ou pausar a SourceDataLine
+            // sourceDataLine.stop(); // Pausa
+            sourceDataLine.flush(); // Limpa dados pendentes
+            // sourceDataLine.start(); // Se você parar, precisa reiniciar
+            System.out.println("APU processamento global: " + (enabled ? "ON" : "OFF"));
+        }
     }
 
     private void initializeSoundAPI() {
@@ -120,6 +132,13 @@ public class APU {
     }
 
     public void update(int cpuCycles) {
+
+        if (!this.emulatorSoundGloballyEnabled || !this.javaSoundInitialized) {
+            // Se o som do emulador estiver desligado globalmente ou a API de som não estiver inicializada,
+            // não processe nada.
+            return;
+        }
+
         if (!javaSoundInitialized) return;
 
         // 1. Frame Sequencer
@@ -644,34 +663,59 @@ public class APU {
             }
         }
 
+        private int dutyStepTimer;
         @Override
         public void trigger() {
-            if (!isDACOn(apu.getReg(hasSweep ? 0x02 : 0x07))) { // Check NRx2 from stored regs
-                enabled = false; return;
+            // ... (habilita o canal, reseta volume/envelope)
+            enabled = true; // Se DAC estiver ON
+            if (!isDACOn(apu.getReg(hasSweep ? 0x02 : 0x07))) { // NRx2
+                enabled = false;
+                return;
             }
-            enabled = true;
-            if (lengthCounter == 0) { // If length was 0 from previous run or initial, set to max
-                loadLength(0); // Max length (64 for pulse)
+
+            if (lengthCounter == 0) {
+                loadLength(0); // Max length (64)
             }
             volume = initialVolume;
-            envelopeCounter = envelopePeriod; // Reset envelope timer
+            envelopeCounter = envelopePeriod;
 
-            // Reset period timer based on new frequency
-            // The actual timer period for square waves is (2048 - frequencyValue) * 4 APU clock cycles (1MHz ticks)
-            // For sample generation, we need to advance the dutyStep based on this.
-            // This part is tricky for sample-by-sample generation.
-            periodTimer = (2048 - frequencyValue) * 4; // Placeholder for actual timer logic
+            dutyStep = 0;
+            // frequencyValue (11-bit) deve estar atualizado pelos writes a NRx3 e NRx4
+            // O timer que avança o dutyStep é clockado a (CPU_CLOCK_SPEED / 8)
+            // E o período para um step é (2048 - frequencyValue) desses clocks.
+            if (frequencyValue >= 2047) { // Frequência muito alta ou inválida
+                dutyStepTimer = Integer.MAX_VALUE; // Efetivamente para o timer
+            } else {
+                dutyStepTimer = (2048 - frequencyValue);
+            }
 
             if (hasSweep) {
                 shadowFrequency = frequencyValue;
-                sweepCounter = sweepPeriod == 0 ? 8 : sweepPeriod; // If period is 0, sweep is off (or treated as 8)
-                sweepEnabledThisTrigger = sweepPeriod > 0 || sweepShift > 0;
-                if (sweepShift > 0) { // Perform initial calculation for overflow check
-                    calculateNewSweepFrequency(true); // Check if initial sweep calculation disables channel
+                sweepCounter = (sweepPeriod == 0 && sweepShift != 0) ? 8 : sweepPeriod; // Se período 0 mas shift >0, ainda pode varrer na primeira vez
+                if(sweepPeriod == 0 && sweepShift == 0) sweepEnabledThisTrigger = false; // Pandocs: sweep timer period is 0, sweep is disabled.
+                else sweepEnabledThisTrigger = true;
+
+                if (sweepShift > 0) {
+                    calculateNewSweepFrequency(true); // Verifica overflow inicial
                 }
             }
-            dutyStep = 0; // Reset duty cycle phase
         }
+
+
+// Este método agora é chamado pela APU com base no clock da CPU, não no sample rate
+// A APU precisa de uma maneira de passar "ticks do clock da APU" para os canais.
+// A estrutura atual de stepSampleGenerator é chamada por amostra de áudio gerada.
+// Vamos adaptar: stepSampleGenerator avança o estado INTERNO do canal,
+// e getOutputSample apenas lê o estado atual.
+// A APU.update() vai ter que simular os ticks do clock interno da APU e chamar um
+// método de step interno dos canais.
+
+        // SOLUÇÃO ATUAL: A APU.update chama stepSampleGenerator() por amostra de saída.
+// Precisamos simular quantos "ticks do timer do canal" ocorreram nesse intervalo.
+// Ticks do timer do canal por segundo = (CPU_CLOCK_SPEED / 8) / (2048 - frequencyValue)
+// Ticks do timer do canal por amostra de saída = Ticks por segundo / SAMPLE_RATE
+        private double channelTimerTicksPerOutputSample; // Recalcular quando frequencyValue muda
+
 
         public void clockSweep() {
             if (!hasSweep || !sweepEnabledThisTrigger || sweepPeriod == 0) return;
@@ -713,43 +757,29 @@ public class APU {
 
 
         @Override
-        public void stepSampleGenerator() {
-            if (!enabled) return;
+        public void stepSampleGenerator() { // Chamado uma vez por amostra de saída de áudio
+            if (!enabled || frequencyValue >= 2047) return;
 
-            // This method should advance the internal phase of the square wave
-            // based on its frequency and the time elapsed (one output sample period).
-            // The period of the square wave generator is (2048 - frequencyValue).
-            // It's clocked by a 1MHz timer (CPU_CLOCK_SPEED / 4).
-            // So, one step of the 8-step duty cycle occurs every (2048 - frequencyValue) / 2 CPU cycles.
-            // (because the formula 131072 / (2048-x) Hz means period is (2048-x) / 131072 sec.
-            // Each of the 8 duty steps is 1/8th of that period.)
-            // This is complex to map directly to CYCLES_PER_OUTPUT_SAMPLE.
-            // A common way is to use a phase accumulator.
+            // Recalcular se a frequência mudou (idealmente feito quando NRx3/NRx4 são escritos)
+            // Para simplificar, fazemos aqui, mas pode ser ineficiente.
+            // Frequência do timer que avança o dutyStep: (CPU_CLOCK_SPEED / 8.0)
+            // Período do dutyStep em unidades desse timer: (2048.0 - frequencyValue)
+            double ticksPerDutyStep = (2048.0 - frequencyValue);
+            if (ticksPerDutyStep <= 0) return; // Evita divisão por zero / comportamento estranho
 
-            // Simplified: advance periodTimer. If it expires, advance dutyStep.
-            // This needs to be scaled by CYCLES_PER_OUTPUT_SAMPLE.
-            // Let's assume periodTimer is in units of "output samples" for now.
-            // If frequency is F_hz, period is 1/F_hz seconds.
-            // Number of output samples per wave period = (1/F_hz) * SAMPLE_RATE
-            // Number of output samples per duty step = ((1/F_hz) * SAMPLE_RATE) / 8
-            // F_hz = 131072 / (2048 - frequencyValue)
-            // Samples per duty step = ( (2048 - frequencyValue) / 131072.0 ) * SAMPLE_RATE / 8.0
-            if (frequencyValue == 2047) return; // Avoid division by zero if freq is max (silent)
-            double samples_per_duty_step = ((2048.0 - frequencyValue) / 131072.0) * SAMPLE_RATE / 8.0;
-            if (samples_per_duty_step == 0) samples_per_duty_step = Double.MAX_VALUE; // effectively off
+            // Quantos ticks do clock de 524kHz (CPU/8) cabem em um período de amostra de áudio?
+            double apuChannelClockTicksPerAudioSample = (APU.CPU_CLOCK_SPEED / 8.0) / APU.SAMPLE_RATE;
 
-            // periodTimer accumulates fractional steps
-            periodTimer++; // This is not right. periodTimer should be a phase accumulator.
-            // Or, it counts down.
-            // For now, let's just make it step slowly for testing.
-            // A proper implementation uses a phase accumulator that increments by freq/sample_rate.
-            // When accumulator overflows, step the duty.
-            // Or, a timer that counts down from (2048 - frequencyValue).
-            // This is a placeholder for correct phase/timer logic.
-            if (periodTimer % (int)Math.max(1, 10 * (2048-frequencyValue)/2048.0) == 0) { // Arbitrary slow down
+            // dutyStepTimer agora acumula esses ticks.
+            dutyStepTimer -= apuChannelClockTicksPerAudioSample; // Contagem regressiva
+
+            while (dutyStepTimer <= 0) {
+                dutyStepTimer += ticksPerDutyStep; // Recarrega o timer para o próximo duty step
                 dutyStep = (dutyStep + 1) % 8;
             }
         }
+// E no trigger, inicializar dutyStepTimer para ticksPerDutyStep:
+// dutyStepTimer = (2048 - frequencyValue); // Em trigger()
 
 
         @Override
