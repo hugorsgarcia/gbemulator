@@ -11,7 +11,7 @@ public class GameBoyWindow extends JFrame {
 
     private static final int SCREEN_WIDTH = 160;
     private static final int SCREEN_HEIGHT = 144;
-    private static final int SCALE = 6; // Escala da tela
+    private static final int SCALE = 3; // Escala da tela
 
     private final GameBoyScreenPanel screenPanel;
     private final GameBoy gameBoy;

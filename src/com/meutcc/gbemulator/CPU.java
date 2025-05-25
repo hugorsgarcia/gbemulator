@@ -2,7 +2,7 @@ package com.meutcc.gbemulator;
 
 import java.util.Arrays;
 
-// Representa a CPU Sharp LR35902 (um híbrido entre Z80 e Intel 8080)
+// Representa a CPU Sharp LR35902
 public class CPU {
 
     private final MMU mmu;
@@ -34,12 +34,12 @@ public class CPU {
     }
 
     public void reset() {
-        a = 0x01; f = 0xB0;
+        a = 0x01; f = 0xB0; // Padrão para DMG Pós-BootROM.
         b = 0x00; c = 0x13;
         d = 0x00; e = 0xD8;
         h = 0x01; l = 0x4D;
         sp = 0xFFFE;
-        pc = 0x0100;
+        pc = 0x0100; // Ponto de entrada da ROM do cartucho
         ime = false;
         halted = false;
         cycles = 0;
@@ -54,10 +54,15 @@ public class CPU {
             return cycles;
         }
 
-        int currentPc = pc; // Para depuração, caso precise do PC antes do fetch
+        int currentPc = pc; // Para depuração
         int opcode = fetch();
-        // System.out.println(String.format("PC:0x%04X Op:0x%02X SP:0x%04X AF:0x%04X BC:0x%04X DE:0x%04X HL:0x%04X IME:%b IF:0x%02X IE:0x%02X",
-        // currentPc, opcode, sp, getAF(), getBC(), getDE(), getHL(), ime, mmu.readByte(MMU.REG_IF), mmu.readByte(MMU.REG_IE) ));
+        // Descomente para depuração pesada de opcodes:
+        // System.out.println(String.format("PC:0x%04X Op:0x%02X AF:%02X%02X BC:%02X%02X DE:%02X%02X HL:%02X%02X SP:0x%04X IME:%b Z:%d N:%d H:%d C:%d IF:0x%02X IE:0x%02X LCDC:0x%02X LY:0x%02X STAT:0x%02X",
+        //         currentPc, opcode, a,f, b,c, d,e, h,l, sp, ime,
+        //         getZeroFlag()?1:0, getSubtractFlag()?1:0, getHalfCarryFlag()?1:0, getCarryFlag()?1:0,
+        //         mmu.readByte(MMU.REG_IF), mmu.readByte(MMU.REG_IE),
+        //         mmu.readByte(MMU.REG_LCDC), mmu.readByte(MMU.REG_LY), mmu.readByte(MMU.REG_STAT) ));
+
         decodeAndExecute(opcode);
 
         return cycles;
@@ -119,20 +124,6 @@ public class CPU {
 
             // STOP (0x10 0x00)
             case 0x10:
-                // int nextByte = fetch(); // STOP é uma instrução de 2 bytes
-                // if (nextByte == 0x00) {
-                // Lógica de STOP (baixo consumo, espera botão, prepara para CGB speed switch)
-                // System.out.println("STOP encountered. Emulation may need specific handling for CGB speed switch or low power mode.");
-                // } else {
-                // System.err.println("Invalid STOP: 0x10 followed by 0x" + String.format("%02X", nextByte) + " treating as NOP.");
-                // }
-                // Por ora, apenas consome o byte se houver e age como NOP.
-                // Se o próximo byte for 0x00, ele será pego pelo fetch() da próxima instrução.
-                // A instrução STOP para o clock até um botão ser pressionado.
-                // Se for CGB, pode ser usado para trocar velocidade.
-                // Simplificação: tratar como NOP ou um HALT muito simples.
-                // halted = true; // Cuidado, STOP e HALT são diferentes.
-                // Para evitar problemas com o PC, apenas NOP.
                 fetch(); // Consome o byte 0x00 que acompanha STOP
                 cycles = 4;
                 break;
@@ -212,9 +203,9 @@ public class CPU {
             // INC SP
             case 0x33: sp = (sp + 1) & 0xFFFF; cycles = 8; break;
             // INC (HL)
-            case 0x34: int val = mmu.readByte(getHL()); mmu.writeByte(getHL(), inc8(val)); cycles = 12; break;
+            case 0x34: int valHL = mmu.readByte(getHL()); mmu.writeByte(getHL(), inc8(valHL)); cycles = 12; break;
             // DEC (HL)
-            case 0x35: val = mmu.readByte(getHL()); mmu.writeByte(getHL(), dec8(val)); cycles = 12; break;
+            case 0x35: valHL = mmu.readByte(getHL()); mmu.writeByte(getHL(), dec8(valHL)); cycles = 12; break;
             // LD (HL),d8
             case 0x36: mmu.writeByte(getHL(), fetch()); cycles = 12; break;
             // SCF
@@ -404,7 +395,7 @@ public class CPU {
             // JP Z,a16
             case 0xCA: if (getZeroFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
             // CB prefix
-            case 0xCB: decodeCB(); break; // decodeCB sets its own cycles
+            case 0xCB: decodeCB(); break;
             // CALL Z,a16
             case 0xCC: if (getZeroFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
             // CALL a16
@@ -420,7 +411,10 @@ public class CPU {
             case 0xD1: setDE(popWord()); cycles = 12; break;
             // JP NC,a16
             case 0xD2: if (!getCarryFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
-            // Opcode 0xD3 não existe
+            // Opcode 0xD3 (OUT (n), A) não existe no Game Boy
+            case 0xD3:
+                System.err.println(String.format("Illegal opcode: 0xD3 at PC: 0x%04X", (pc-1)&0xFFFF));
+                halted = true; cycles = 4; break;
             // CALL NC,a16
             case 0xD4: if (!getCarryFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
             // PUSH DE
@@ -436,47 +430,92 @@ public class CPU {
             case 0xD9: ret(); ime = true; cycles = 16; break;
             // JP C,a16
             case 0xDA: if (getCarryFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
-            // Opcode 0xDB não existe
+            // Opcode 0xDB (IN A, (n)) não existe no Game Boy
+            case 0xDB:
+                System.err.println(String.format("Illegal opcode: 0xDB at PC: 0x%04X", (pc-1)&0xFFFF));
+                halted = true; cycles = 4; break;
             // CALL C,a16
             case 0xDC: if (getCarryFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
-            // Opcode 0xDD não existe
+            // Opcode 0xDD não existe (seria prefixo IX para Z80 completo)
+            case 0xDD:
+                System.err.println(String.format("Illegal opcode (Z80 IX prefix): 0xDD at PC: 0x%04X", (pc-1)&0xFFFF));
+                halted = true; cycles = 4; break;
             // SBC A,d8
             case 0xDE: sbcA(fetch()); cycles = 8; break;
             // RST 18H
             case 0xDF: rst(0x18); cycles = 16; break;
 
+            // LDH (a8),A  -> LD (0xFF00+a8),A
             case 0xE0: mmu.writeByte(0xFF00 + fetch(), a); cycles = 12; break;
+            // POP HL
             case 0xE1: setHL(popWord()); cycles = 12; break;
+            // LD (C),A -> LD (0xFF00+C),A
             case 0xE2: mmu.writeByte(0xFF00 + (c & 0xFF), a); cycles = 8; break;
-            // Opcode 0xE3 não existe
-            // Opcode 0xE4 não existe
+            // Opcodes 0xE3, 0xE4 não existem
+            case 0xE3: case 0xE4:
+                System.err.println(String.format("Illegal opcode: 0x%02X at PC: 0x%04X", opcode, (pc-1)&0xFFFF));
+                halted = true; cycles = 4; break;
+            // PUSH HL
             case 0xE5: pushWord(getHL()); cycles = 16; break;
+            // AND A,d8
             case 0xE6: andA(fetch()); cycles = 8; break;
+            // RST 20H
             case 0xE7: rst(0x20); cycles = 16; break;
+            // ADD SP,r8 (signed)
             case 0xE8: addSP_r8(); cycles = 16; break;
+            // JP HL
             case 0xE9: pc = getHL(); cycles = 4; break;
+            // LD (a16),A
             case 0xEA: mmu.writeByte(fetchWord(), a); cycles = 16; break;
-            // Opcode 0xEB não existe
-            // Opcode 0xEC não existe
-            // Opcode 0xED não existe
+            // Opcode 0xEB: EX DE,HL
+            case 0xEB:
+                int tempDE = getDE();
+                setDE(getHL());
+                setHL(tempDE);
+                cycles = 4;
+                break;
+            // Opcodes 0xEC, 0xED não existem
+            case 0xEC: case 0xED:
+                System.err.println(String.format("Illegal opcode: 0x%02X at PC: 0x%04X", opcode, (pc-1)&0xFFFF));
+                halted = true; cycles = 4; break;
+            // XOR A,d8
             case 0xEE: xorA(fetch()); cycles = 8; break;
+            // RST 28H
             case 0xEF: rst(0x28); cycles = 16; break;
 
+            // LDH A,(a8) -> LD A,(0xFF00+a8)
             case 0xF0: a = mmu.readByte(0xFF00 + fetch()); cycles = 12; break;
+            // POP AF
             case 0xF1: setAF(popWord()); cycles = 12; break;
+            // LD A,(C) -> LD A,(0xFF00+C)
             case 0xF2: a = mmu.readByte(0xFF00 + (c & 0xFF)); cycles = 8; break;
+            // DI
             case 0xF3: ime = false; cycles = 4; break;
             // Opcode 0xF4 não existe
+            case 0xF4:
+                System.err.println(String.format("Illegal opcode: 0xF4 at PC: 0x%04X", (pc-1)&0xFFFF));
+                halted = true; cycles = 4; break;
+            // PUSH AF
             case 0xF5: pushWord(getAF()); cycles = 16; break;
+            // OR A,d8
             case 0xF6: orA(fetch()); cycles = 8; break;
+            // RST 30H
             case 0xF7: rst(0x30); cycles = 16; break;
+            // LD HL,SP+r8 (signed)
             case 0xF8: ldHL_SP_r8(); cycles = 12; break;
+            // LD SP,HL
             case 0xF9: sp = getHL(); cycles = 8; break;
+            // LD A,(a16)
             case 0xFA: a = mmu.readByte(fetchWord()); cycles = 16; break;
-            case 0xFB: ime = true; cycles = 4; break; // EI takes 1 instruction to take effect, this is simplified
-            // Opcode 0xFC não existe
-            // Opcode 0xFD não existe
+            // EI
+            case 0xFB: ime = true; cycles = 4; break;
+            // Opcodes 0xFC, 0xFD não existem
+            case 0xFC: case 0xFD:
+                System.err.println(String.format("Illegal opcode: 0x%02X at PC: 0x%04X", opcode, (pc-1)&0xFFFF));
+                halted = true; cycles = 4; break;
+            // CP A,d8
             case 0xFE: cpA(fetch()); cycles = 8; break;
+            // RST 38H
             case 0xFF: rst(0x38); cycles = 16; break;
 
 
@@ -665,10 +704,10 @@ public class CPU {
     private boolean getZeroFlag() { return (f & ZERO_FLAG) != 0; }
 
     private void setSubtractFlag(boolean set) { f = set ? (f | SUBTRACT_FLAG) : (f & ~SUBTRACT_FLAG); }
-    private boolean getSubtractFlag() { return (f & SUBTRACT_FLAG) != 0; } // CORRIGIDO: Descomentado
+    private boolean getSubtractFlag() { return (f & SUBTRACT_FLAG) != 0; }
 
     private void setHalfCarryFlag(boolean set) { f = set ? (f | HALF_CARRY_FLAG) : (f & ~HALF_CARRY_FLAG); }
-    private boolean getHalfCarryFlag() { return (f & HALF_CARRY_FLAG) != 0; } // CORRIGIDO: Descomentado
+    private boolean getHalfCarryFlag() { return (f & HALF_CARRY_FLAG) != 0; }
 
     private void setCarryFlag(boolean set) { f = set ? (f | CARRY_FLAG) : (f & ~CARRY_FLAG); }
     private boolean getCarryFlag() { return (f & CARRY_FLAG) != 0; }
@@ -811,7 +850,6 @@ public class CPU {
         return (msb << 8) | lsb;
     }
 
-    // CORRIGIDO: Renomeado para jr_unconditional e jp_unconditional para clareza
     private void jr_unconditional() {
         byte offset = (byte) fetch();
         pc = (pc + offset) & 0xFFFF;
@@ -827,7 +865,6 @@ public class CPU {
         pc = callAddr;
     }
 
-    // CORRIGIDO: ret() simplificado
     private void ret() {
         pc = popWord();
     }
@@ -836,7 +873,6 @@ public class CPU {
     private void rst(int addr) {
         pushWord(pc);
         pc = addr;
-        // cycles = 16; // Definido no chamador (decodeAndExecute)
     }
 
     private void rlca() {
@@ -975,57 +1011,30 @@ public class CPU {
 
     private void daa() {
         int correction = 0;
-        boolean originalCarry = getCarryFlag(); // Salva o carry original
+        boolean originalCarry = getCarryFlag();
 
-        if (getSubtractFlag()) { // After a subtraction
+        if (getSubtractFlag()) {
             if (getHalfCarryFlag()) {
-                correction = (correction - 0x06) & 0xFF;
+                correction = (correction + 0x06) & 0xFF;
             }
-            if (originalCarry) { // Use original carry here
-                correction = (correction - 0x60) & 0xFF;
+            if (originalCarry) {
+                correction = (correction + 0x60) & 0xFF;
             }
-        } else { // After an addition
+            a = (a - correction) & 0xFF;
+        } else {
             if ((a & 0x0F) > 0x09 || getHalfCarryFlag()) {
                 correction += 0x06;
             }
-            if (a > 0x99 || originalCarry) { // Use original carry here
+            if (a > 0x99 || originalCarry) {
                 correction += 0x60;
-                setCarryFlag(true); // Set carry if overflow from 0x99 or original carry was set
+                setCarryFlag(true);
             } else {
-                // setCarryFlag(false); // Only set, never reset by DAA if not subtracting.
-                // No, DAA can clear carry if it was set by previous ADD/ADC but result is < 0x100 after DAA.
-                // But if correction made it >0xFF, then C is set. This is tricky.
-                // PanDocs: "C flag is set if (post-DAA value of A) > $FF"
-                // Simpler: if original carry or A > 0x99, set C.
+                setCarryFlag(false);
             }
+            a = (a + correction) & 0xFF;
         }
-
-        a = (a + (getSubtractFlag() ? -correction : correction)) & 0xFF;
-
         setZeroFlag(a == 0);
-        setHalfCarryFlag(false); // H é sempre resetado
-
-        // Recalcular Carry Flag baseado no resultado final e se a correção foi > 0xFF (para adição)
-        // ou se houve "borrow" (para subtração).
-        // Para adição: se 'correction' causou um overflow em 'a', ou se C já estava setado.
-        // O carry é setado se a > 0x99 *antes* da correção do nibble alto OU se o carry já estava setado.
-        // E se a correção do nibble alto (0x60) for aplicada, o carry é setado.
-        // Se (a_antes_daa + correction) > 0xFF, set C. A lógica de `correction += 0x60` e `setCarryFlag(true)`
-        // acima deve cobrir isso para adição. Para subtração, a carry flag (borrow) é setada pela instrução SUB/SBC.
-        // A DAA para subtração não reseta a flag C se ela foi setada por SUB/SBC.
-        if ((correction & 0x60) != 0 && !getSubtractFlag()){ // Se 0x60 foi adicionado
-            setCarryFlag(true);
-        } else if (!getSubtractFlag()) {
-            // Para adição, DAA não reseta o Carry Flag se não houve overflow do nibble alto.
-            // Ela o preserva se já estava setado, e o seta se houve overflow.
-            // Se C estava setado E não houve overflow do nibble alto pela DAA, C permanece setado.
-            // Se C não estava setado E não houve overflow do nibble alto pela DAA, C permanece não setado.
-            // A lógica acima ( `if (a > 0x99 || originalCarry)` ) já cuida disso.
-        }
-        // Para subtração, a DAA não altera a flag C. Ela permanece como foi setada pela SUB/SBC.
-        if (getSubtractFlag()) {
-            setCarryFlag(originalCarry);
-        }
+        setHalfCarryFlag(false);
     }
 
 
@@ -1055,7 +1064,8 @@ public class CPU {
 
         byte IE = (byte) mmu.readByte(0xFFFF);
         byte IF = (byte) mmu.readByte(0xFF0F);
-        byte requestedAndEnabled = (byte) (IE & IF & 0x1F); // Considera apenas os 5 bits de interrupção
+
+        byte requestedAndEnabled = (byte) (IE & IF & 0x1F);
 
         if (requestedAndEnabled == 0) {
             return;
@@ -1067,52 +1077,32 @@ public class CPU {
             return;
         }
 
-        ime = false; // Desabilita interrupções master
-        int originalCycles = cycles; // Salva ciclos da instrução atual
+        ime = false;
+        cycles = 0;
 
-        // Adiciona 5 machine cycles (20 T-cycles) para o processamento da interrupção
-        // Esses ciclos ocorrem *em vez* da próxima instrução.
-        // O RST em si já consome 16 ciclos (4 M-cycles).
-        // O overhead (checar flags, push PC, jump) é de 2 M-cycles (8 T-cycles) antes do RST.
-        // E 2 M-cycles para push PC.
-        // Total: Push PC (8T) + Jump (efetivo do RST, que também faz push)
-        // PanDocs: "When an interrupt is serviced, the CPU takes 5 M-cycles (20 T-states)"
-        // Esses 20 T-cycles incluem:
-        // - 2 M-cycles (8 T-cycles): Tempo para reconhecer a interrupção e desabilitar IME.
-        // - 2 M-cycles (8 T-cycles): Push do PC atual para o stack.
-        // - 1 M-cycle (4 T-cycles): Salto para o vetor de interrupção.
-        // O `rst()` já cuida do push e do salto (16 ciclos). O que falta são os 2 M-cycles iniciais.
-        // Mas como o rst() é chamado *depois* de ime=false, vamos adicionar os 20 ciclos
-        // e subtrair os ciclos do RST se o rst() já os contabiliza.
-        // Simplificação: O `rst()` define cycles=16. Adicionaremos 4 ciclos de overhead aqui.
-        // Ou, melhor: a chamada de uma interrupção custa 20 ciclos no total.
-        // O `rst()` é parte disso.
-        cycles = 0; // Reinicia para os ciclos da interrupção.
 
-        if ((requestedAndEnabled & 0x01) != 0) { // VBlank
+        if ((requestedAndEnabled & 0x01) != 0) { // VBlank (Bit 0, highest priority)
             mmu.writeByte(0xFF0F, IF & ~0x01);
-            rst(0x0040); // rst já faz pushWord(pc) e pc = addr
-            cycles = 20; // Total para servir a interrupção
-        } else if ((requestedAndEnabled & 0x02) != 0) { // LCD STAT
+            rst(0x0040);
+            cycles = 20;
+        } else if ((requestedAndEnabled & 0x02) != 0) { // LCD STAT (Bit 1)
             mmu.writeByte(0xFF0F, IF & ~0x02);
             rst(0x0048);
             cycles = 20;
-        } else if ((requestedAndEnabled & 0x04) != 0) { // Timer
+        } else if ((requestedAndEnabled & 0x04) != 0) { // Timer (Bit 2)
             mmu.writeByte(0xFF0F, IF & ~0x04);
             rst(0x0050);
             cycles = 20;
-        } else if ((requestedAndEnabled & 0x08) != 0) { // Serial
+        } else if ((requestedAndEnabled & 0x08) != 0) { // Serial (Bit 3)
             mmu.writeByte(0xFF0F, IF & ~0x08);
             rst(0x0058);
             cycles = 20;
-        } else if ((requestedAndEnabled & 0x10) != 0) { // Joypad
+        } else if ((requestedAndEnabled & 0x10) != 0) { // Joypad (Bit 4, lowest priority)
             mmu.writeByte(0xFF0F, IF & ~0x10);
             rst(0x0060);
             cycles = 20;
         } else {
-            // Nenhuma interrupção tratada, restaura IME e ciclos (improvável chegar aqui devido ao check anterior)
             ime = true;
-            cycles = originalCycles;
         }
     }
 
