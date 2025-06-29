@@ -9,13 +9,13 @@ public class GameBoyWindow extends JFrame {
 
     private static final int SCREEN_WIDTH = 160;
     private static final int SCREEN_HEIGHT = 144;
-    private static final int SCALE = 3; // Escala da tela
+    private static final int SCALE = 3;
 
     private final GameBoyScreenPanel screenPanel;
-    private final GameBoy gameBoy; // Campo final
+    private final GameBoy gameBoy;
     private Thread emulationThread;
     private volatile boolean running = false;
-    private final InputHandler inputHandler; // Campo final
+    private final InputHandler inputHandler;
 
     // Flag para controlar o estado global do som do emulador
     private boolean globalSoundEnabled = true;
@@ -25,30 +25,23 @@ public class GameBoyWindow extends JFrame {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setResizable(false);
 
-        // 1. Inicialize os componentes principais primeiro
+
         gameBoy = new GameBoy();
-        // Informa o GameBoy sobre o estado inicial do som (após gameBoy ser instanciado)
-        // Você precisará do método setEmulatorSoundGloballyEnabled em GameBoy.java
         gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
+        inputHandler = new InputHandler(gameBoy.getMmu());
 
-        // 2. Inicialize handlers que dependem dos componentes principais
-        inputHandler = new InputHandler(gameBoy.getMmu()); // Agora gameBoy está inicializado
 
-        // 3. Configure os componentes da GUI
         screenPanel = new GameBoyScreenPanel();
         add(screenPanel, BorderLayout.CENTER);
 
-        // Menu
         JMenuBar menuBar = new JMenuBar();
 
-        // Menu "File"
         JMenu fileMenu = new JMenu("File");
         JMenuItem loadRomItem = new JMenuItem("Load ROM...");
         loadRomItem.addActionListener(e -> openRomChooser());
         fileMenu.add(loadRomItem);
         menuBar.add(fileMenu);
 
-        // Menu "Controle"
         JMenu controlMenu = new JMenu("Controle");
         JMenuItem showControlsItem = new JMenuItem("Exibir Controles do Teclado");
         showControlsItem.addActionListener(e -> showControlMapping());
@@ -60,22 +53,15 @@ public class GameBoyWindow extends JFrame {
         JCheckBoxMenuItem toggleSoundItem = new JCheckBoxMenuItem("Habilitar Som", globalSoundEnabled);
         toggleSoundItem.addActionListener(e -> {
             globalSoundEnabled = toggleSoundItem.isSelected();
-            // gameBoy já estará inicializado quando este listener for executado.
-            // A verificação 'if (gameBoy != null)' é uma segurança extra, mas não estritamente necessária
-            // aqui devido à ordem de inicialização.
             gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
             System.out.println("Emulação de Som: " + (globalSoundEnabled ? "Habilitada" : "Desabilitada"));
         });
+
         soundMenu.add(toggleSoundItem);
         menuBar.add(soundMenu);
-
         setJMenuBar(menuBar);
-
-        // 4. Adicione listeners de teclado e configure o foco
         addKeyListener(inputHandler);
-        setFocusable(true); // Crucial para que o JFrame receba eventos de teclado
-
-        // 5. Finalize o layout da janela
+        setFocusable(true);
         pack();
         setLocationRelativeTo(null); // Centralizar
     }
@@ -130,7 +116,6 @@ public class GameBoyWindow extends JFrame {
 
         if (gameBoy.loadROM(romPath)) {
             System.out.println("ROM loaded: " + romPath);
-            // Garante que o estado do som do emulador é aplicado
             gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
             startEmulation();
         } else {
@@ -142,7 +127,7 @@ public class GameBoyWindow extends JFrame {
     private void startEmulation() {
         // Certifique-se de que qualquer emulação anterior parou completamente
         if (emulationThread != null && emulationThread.isAlive()) {
-            running = false; // Sinaliza para parar
+            running = false;
             try {
                 emulationThread.join(500); // Espera pela thread anterior
             } catch (InterruptedException e) {
@@ -150,7 +135,7 @@ public class GameBoyWindow extends JFrame {
             }
         }
 
-        // Aplica o estado de som atual ao gameBoy antes de iniciar
+
         if (gameBoy != null) {
             gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
         }
@@ -167,16 +152,13 @@ public class GameBoyWindow extends JFrame {
 
         long lastTime = System.nanoTime();
         gameBoy.reset();
-        // Após o reset, reconfirme o estado do som, pois o reset pode alterar flags na APU
-        // ou em outros componentes que afetam a APU.
+        // reconfirma o estado do som, o reset pode alterar flags na APU ou em outros componentes que afetam a APU.
         gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
 
 
         while (running) {
             int cyclesThisFrame = 0;
             while (cyclesThisFrame < CYCLES_PER_FRAME) {
-                // gameBoy.step() internamente decidirá se chama apu.update()
-                // com base na flag emulatorSoundGloballyEnabled que ele possui.
                 int cycles = gameBoy.step();
                 if (cycles == -1) { // CPU Halted indefinidamente ou erro fatal
                     running = false;
@@ -199,16 +181,14 @@ public class GameBoyWindow extends JFrame {
                     Thread.sleep(sleepTime / 1_000_000, (int) (sleepTime % 1_000_000));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    running = false; // Importante para sair do loop se a thread for interrompida
+                    running = false; //sai loop se a thread for interrompida
                 }
             }
             lastTime = System.nanoTime();
 
-            // Pedido de foco pode ser agressivo; certifique-se que é necessário.
-            // Pode ser melhor garantir o foco ao iniciar a janela ou ao carregar a ROM.
-            // if (!this.hasFocus() && this.isFocusOwner()) {
-            //     this.requestFocusInWindow();
-            // }
+            if (!this.hasFocus() && this.isFocusOwner()) {
+                 this.requestFocusInWindow();
+            }
         }
         System.out.println("Emulation loop stopped.");
     }

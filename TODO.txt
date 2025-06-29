@@ -1,0 +1,14 @@
+- MMU.java: Implementar Timer (REG_TIMA, REG_TMA, REG_TAC) e lógica do DIV (reset do acumulador de ciclos na CPU ao escrever em REG_DIV).
+- MMU.java: Implementar Serial (REG_SB, REG_SC) para comunicação serial real.
+- MMU.java: Implementar outros registradores de I/O (bootstrap ROM disable, speed switch CGB, etc.).
+- MMU.java: Implementar lógica de DMA mais precisa (CPU deve esperar durante DMA).
+- Cartridge.java: Implementar advanced MBC1 banking para 0x0000-0x3FFF se necessário.
+- Cartridge.java: Suporte completo a outros tipos de MBC além de ROM_ONLY e MBC1.
+- PPU.java: Respeitar bloqueio de acesso à VRAM/OAM durante modos específicos da PPU.
+- PPU.java: Implementar renderização completa de BG, Window e Sprites conforme prioridade e atributos.
+- PPU.java: Implementar paletas de cor para Game Boy Color (CGB).
+- APU.java: Implementar canais de som completos, sweep, envelope, length, e suporte a todos os registradores.
+- APU.java: Implementar suporte a desligamento do som global (NR52).
+- CPU.java: Implementar todas as instruções e modos de endereçamento do LR35902.
+- CPU.java: Implementar interrupções e HALT/STOP corretamente.
+- Geral: Testes automatizados para cada componente.

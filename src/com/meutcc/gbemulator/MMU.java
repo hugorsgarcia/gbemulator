@@ -10,7 +10,7 @@ public class MMU {
     // A000-BFFF: 8KB External RAM (no cartucho, se houver, comutável)
     // C000-CFFF: 4KB Work RAM Bank 0 (WRAM)
     // D000-DFFF: 4KB Work RAM Bank 1 (WRAM) (comutável em CGB, fixo em DMG)
-    // E000-FDFF: Echo RAM (espelho de C000-DDFF) - Acesso aqui é redirecionado
+    // E000-FDFF: Echo RAM (espelho de C000-DDFF)
     // FE00-FE9F: Sprite Attribute Table (OAM)
     // FEA0-FEFF: Não utilizável
     // FF00-FF7F: I/O Registers

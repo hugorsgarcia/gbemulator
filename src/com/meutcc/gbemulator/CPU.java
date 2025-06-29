@@ -71,7 +71,7 @@ public class CPU {
 
         int currentPc = pc; // Para depuração
         int opcode = fetch();
-        // Descomente para depuração pesada de opcodes:
+        // Descomentar para depuração de opcodes:
         /*System.out.println(String.format("PC:0x%04X Op:0x%02X AF:%02X%02X BC:%02X%02X DE:%02X%02X HL:%02X%02X SP:0x%04X IME:%b Z:%d N:%d H:%d C:%d IF:0x%02X IE:0x%02X LCDC:0x%02X LY:0x%02X STAT:0x%02X",
                  currentPc, opcode, a,f, b,c, d,e, h,l, sp, ime,
                  getZeroFlag()?1:0, getSubtractFlag()?1:0, getHalfCarryFlag()?1:0, getCarryFlag()?1:0,
