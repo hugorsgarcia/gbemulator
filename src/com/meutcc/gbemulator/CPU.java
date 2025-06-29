@@ -48,6 +48,10 @@ public class CPU {
         System.out.println("CPU reset. PC=" + String.format("0x%04X", pc));
     }
 
+    public void resetDivAccumulator() {
+        this.divAccumulator = 0;
+    }
+
     public int step() {
         cycles = 0;
         int executedCyclesThisStep = 0;
@@ -55,7 +59,6 @@ public class CPU {
         if (halted) {
             executedCyclesThisStep = 4; // HALT consome ciclos como um NOP
         } else {
-            // int currentPc = pc; // Para depuração
             int opcode = fetch();
             decodeAndExecute(opcode); // Este método define this.cycles
             executedCyclesThisStep = this.cycles; // Captura os ciclos da instrução executada
@@ -68,17 +71,6 @@ public class CPU {
             mmu.incrementDivRegister(); // Chama o novo método na MMU
         }
         // -----------------------------------
-
-        int currentPc = pc; // Para depuração
-        int opcode = fetch();
-        // Descomentar para depuração de opcodes:
-        /*System.out.println(String.format("PC:0x%04X Op:0x%02X AF:%02X%02X BC:%02X%02X DE:%02X%02X HL:%02X%02X SP:0x%04X IME:%b Z:%d N:%d H:%d C:%d IF:0x%02X IE:0x%02X LCDC:0x%02X LY:0x%02X STAT:0x%02X",
-                 currentPc, opcode, a,f, b,c, d,e, h,l, sp, ime,
-                 getZeroFlag()?1:0, getSubtractFlag()?1:0, getHalfCarryFlag()?1:0, getCarryFlag()?1:0,
-                 mmu.readByte(MMU.REG_IF), mmu.readByte(MMU.REG_IE),
-                 mmu.readByte(MMU.REG_LCDC), mmu.readByte(MMU.REG_LY), mmu.readByte(MMU.REG_STAT) ));*/
-
-        decodeAndExecute(opcode);
 
         return executedCyclesThisStep;
     }
