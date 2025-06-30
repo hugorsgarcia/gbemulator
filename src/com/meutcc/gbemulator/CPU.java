@@ -31,6 +31,8 @@ public class CPU {
 
     public CPU(MMU mmu) {
         this.mmu = mmu;
+        // A MMU precisa de uma referência à CPU para resetar o acumulador do DIV.
+        mmu.setCpu(this);
         reset();
     }
 
@@ -48,6 +50,10 @@ public class CPU {
         System.out.println("CPU reset. PC=" + String.format("0x%04X", pc));
     }
 
+    /**
+     * Reseta o acumulador de ciclos usado para incrementar o registrador DIV.
+     * Chamado pela MMU quando o registrador DIV (0xFF04) é escrito.
+     */
     public void resetDivAccumulator() {
         this.divAccumulator = 0;
     }
@@ -55,6 +61,8 @@ public class CPU {
     public int step() {
         cycles = 0;
         int executedCyclesThisStep = 0;
+
+        handleInterrupts(); // Processa interrupções antes de executar a próxima instrução.
 
         if (halted) {
             executedCyclesThisStep = 4; // HALT consome ciclos como um NOP
@@ -131,7 +139,9 @@ public class CPU {
 
             // STOP (0x10 0x00)
             case 0x10:
+                // TODO: Implementar lógica de STOP (e CGB speed switch)
                 fetch(); // Consome o byte 0x00 que acompanha STOP
+                halted = true; // Comportamento simplificado
                 cycles = 4;
                 break;
 
@@ -474,15 +484,8 @@ public class CPU {
             case 0xE9: pc = getHL(); cycles = 4; break;
             // LD (a16),A
             case 0xEA: mmu.writeByte(fetchWord(), a); cycles = 16; break;
-            // Opcode 0xEB: EX DE,HL
-            case 0xEB:
-                int tempDE = getDE();
-                setDE(getHL());
-                setHL(tempDE);
-                cycles = 4;
-                break;
-            // Opcodes 0xEC, 0xED não existem
-            case 0xEC: case 0xED:
+            // Opcodes 0xEB, 0xEC, 0xED não existem no DMG
+            case 0xEB: case 0xEC: case 0xED:
                 System.err.println(String.format("Illegal opcode: 0x%02X at PC: 0x%04X", opcode, (pc-1)&0xFFFF));
                 halted = true; cycles = 4; break;
             // XOR A,d8
@@ -1018,30 +1021,34 @@ public class CPU {
 
     private void daa() {
         int correction = 0;
-        boolean originalCarry = getCarryFlag();
+        boolean needsCarry = false;
 
-        if (getSubtractFlag()) {
+        if (!getSubtractFlag()) { // after addition
+            if (getCarryFlag() || a > 0x99) {
+                correction |= 0x60;
+                needsCarry = true;
+            }
+            if (getHalfCarryFlag() || (a & 0x0F) > 0x09) {
+                correction |= 0x06;
+            }
+        } else { // after subtraction
+            if (getCarryFlag()) {
+                correction |= 0x60;
+                needsCarry = true;
+            }
             if (getHalfCarryFlag()) {
-                correction = (correction + 0x06) & 0xFF;
+                correction |= 0x06;
             }
-            if (originalCarry) {
-                correction = (correction + 0x60) & 0xFF;
-            }
-            a = (a - correction) & 0xFF;
-        } else {
-            if ((a & 0x0F) > 0x09 || getHalfCarryFlag()) {
-                correction += 0x06;
-            }
-            if (a > 0x99 || originalCarry) {
-                correction += 0x60;
-                setCarryFlag(true);
-            } else {
-                setCarryFlag(false);
-            }
-            a = (a + correction) & 0xFF;
         }
+
+        a += getSubtractFlag() ? -correction : correction;
+        a &= 0xFF;
+
         setZeroFlag(a == 0);
         setHalfCarryFlag(false);
+        if (needsCarry) {
+            setCarryFlag(true);
+        }
     }
 
 
@@ -1078,6 +1085,7 @@ public class CPU {
             return;
         }
 
+        // HALT é encerrado se qualquer interrupção (mesmo desabilitada no IE) estiver pendente no IF
         halted = false;
 
         if (!ime) {
@@ -1086,28 +1094,26 @@ public class CPU {
 
         ime = false;
 
+        // Consome 20 ciclos para o despacho da interrupção
+        cycles += 20;
 
         if ((requestedAndEnabled & 0x01) != 0) { // VBlank (Bit 0, highest priority)
             mmu.writeByte(0xFF0F, IF & ~0x01);
             rst(0x0040);
-            cycles = 20;
         } else if ((requestedAndEnabled & 0x02) != 0) { // LCD STAT (Bit 1)
             mmu.writeByte(0xFF0F, IF & ~0x02);
             rst(0x0048);
-            cycles = 20;
         } else if ((requestedAndEnabled & 0x04) != 0) { // Timer (Bit 2)
             mmu.writeByte(0xFF0F, IF & ~0x04);
             rst(0x0050);
-            cycles = 20;
         } else if ((requestedAndEnabled & 0x08) != 0) { // Serial (Bit 3)
             mmu.writeByte(0xFF0F, IF & ~0x08);
             rst(0x0058);
-            cycles = 20;
         } else if ((requestedAndEnabled & 0x10) != 0) { // Joypad (Bit 4, lowest priority)
             mmu.writeByte(0xFF0F, IF & ~0x10);
             rst(0x0060);
-            cycles = 20;
         } else {
+            // Nenhuma interrupção foi tratada, reabilitar IME
             ime = true;
         }
     }
