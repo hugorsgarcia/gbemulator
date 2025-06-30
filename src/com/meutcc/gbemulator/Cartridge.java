@@ -62,10 +62,29 @@ public class Cartridge {
             case 0x02: // MBC1+RAM
             case 0x03: // MBC1+RAM+BATTERY
                 return new MBC1(romData, ramSizeCode);
-            // Adicione outros casos de MBC aqui
+
+            // --- NOVAS ENTRADAS AQUI ---
+            case 0x05: // MBC2
+            case 0x06: // MBC2+BATTERY
+                return new MBC2(romData);
+
+            case 0x0F: // MBC3+TIMER+BATTERY
+            case 0x10: // MBC3+TIMER+RAM+BATTERY
+            case 0x11: // MBC3
+            case 0x12: // MBC3+RAM
+            case 0x13: // MBC3+RAM+BATTERY
+                return new MBC3(romData, ramSizeCode);
+
+            case 0x19: // MBC5
+            case 0x1A: // MBC5+RAM
+            case 0x1B: // MBC5+RAM+BATTERY
+            case 0x1C: // MBC5+RUMBLE
+            case 0x1D: // MBC5+RUMBLE+RAM
+            case 0x1E: // MBC5+RUMBLE+RAM+BATTERY
+                return new MBC5(romData, ramSizeCode); // Lógica de Rumble não implementada
+
             default:
                 System.err.println("AVISO: Tipo de MBC 0x" + Integer.toHexString(mbcTypeCode) + " não suportado. Tratando como ROM Only.");
-                // Como fallback, podemos tratar como ROM Only para tentar carregar o jogo
                 return new Mbc0RomOnly(romData);
         }
     }
@@ -88,6 +107,230 @@ public class Cartridge {
 
     public void update(int cycles) {
         mbc.update(cycles);
+    }
+}
+
+class MBC2 extends AbstractMBC {
+    private int romBank = 1;
+
+    public MBC2(byte[] romData) {
+        // MBC2 usa 512x4 bits de RAM interna, vamos alocar 256 bytes (512 nibbles)
+        super(romData, 0x01); // 0x01 é um código inválido de RAM, mas alocamos manualmente
+        this.ramData = new byte[512]; // 512 nibbles = 256 bytes, mas endereçamos até 511
+        Arrays.fill(this.ramData, (byte) 0xFF);
+        System.out.println("RAM Interna do MBC2 alocada: 512x4 bits.");
+    }
+
+    @Override
+    public int read(int address) {
+        if (address >= 0x0000 && address <= 0x3FFF) {
+            return romData[address] & 0xFF; // Banco 0 fixo
+        } else if (address >= 0x4000 && address <= 0x7FFF) {
+            int mappedAddress = (romBank * 0x4000) + (address - 0x4000);
+            if (mappedAddress < romData.length) {
+                return romData[mappedAddress] & 0xFF;
+            }
+        }
+        return 0xFF;
+    }
+
+    @Override
+    public void write(int address, byte value) {
+        if (address >= 0x0000 && address <= 0x3FFF) {
+            // Bit 8 do endereço determina a função
+            if ((address & 0x0100) == 0) { // Bit 8 = 0 -> RAM Enable
+                ramEnabled = (value & 0x0F) == 0x0A;
+            } else { // Bit 8 = 1 -> ROM Bank Select
+                romBank = value & 0x0F;
+                if (romBank == 0) romBank = 1;
+            }
+        }
+    }
+
+    @Override
+    protected int readRamBank(int address) {
+        // MBC2 tem 512 nibbles (4-bit) de RAM.
+        int ramAddress = address & 0x01FF; // Endereços dão a volta a cada 512 bytes
+        if (ramData != null && ramAddress < ramData.length) {
+            return (ramData[ramAddress] & 0x0F) | 0xF0; // Retorna apenas os 4 bits de baixo
+        }
+        return 0xFF;
+    }
+
+    @Override
+    protected void writeRamBank(int address, byte value) {
+        int ramAddress = address & 0x01FF;
+        if (ramData != null && ramAddress < ramData.length) {
+            ramData[ramAddress] = (byte)(value & 0x0F); // Armazena apenas os 4 bits de baixo
+        }
+    }
+}
+
+
+// =========================================================================
+// MBC 3 (com Relógio em Tempo Real - RTC)
+// =========================================================================
+class MBC3 extends AbstractMBC {
+    private int romBank = 1;
+    private int ramBankOrRtcRegister = 0; // 0-3 para RAM, 8-C para RTC
+    private long rtcLatchedTime = 0;
+    private long rtcLastUpdateTime = System.currentTimeMillis();
+    private final byte[] rtcRegisters = new byte[5]; // S, M, H, DL, DH
+
+    public MBC3(byte[] romData, int ramSizeCode) {
+        super(romData, ramSizeCode);
+    }
+
+    @Override
+    public void update(int cycles) {
+        // Atualiza o RTC. Uma implementação mais precisa usaria o oscilador de 32768Hz,
+        // mas usar o tempo do sistema é uma aproximação funcional.
+        long now = System.currentTimeMillis();
+        if (now - rtcLastUpdateTime > 1000) { // Atualiza a cada segundo
+            rtcLastUpdateTime = now;
+            if ((rtcRegisters[4] & 0x40) == 0) { // Se o relógio não estiver parado (Halt = 0)
+                long totalSeconds = getRtcSeconds();
+                totalSeconds++;
+                setRtcSeconds(totalSeconds);
+            }
+        }
+    }
+
+    @Override
+    public int read(int address) {
+        if (address >= 0x0000 && address <= 0x3FFF) {
+            return romData[address] & 0xFF;
+        } else if (address >= 0x4000 && address <= 0x7FFF) {
+            int mappedAddress = (romBank * 0x4000) + (address - 0x4000);
+            if (mappedAddress < romData.length) {
+                return romData[mappedAddress] & 0xFF;
+            }
+        }
+        return 0xFF;
+    }
+
+    @Override
+    public void write(int address, byte value) {
+        if (address >= 0x0000 && address <= 0x1FFF) { // RAM e Timer Enable
+            ramEnabled = (value & 0x0F) == 0x0A;
+        } else if (address >= 0x2000 && address <= 0x3FFF) { // ROM Bank
+            romBank = value & 0x7F;
+            if (romBank == 0) romBank = 1;
+        } else if (address >= 0x4000 && address <= 0x5FFF) { // RAM Bank ou RTC Register Select
+            ramBankOrRtcRegister = value & 0x0F;
+        } else if (address >= 0x6000 && address <= 0x7FFF) { // Latch Clock Data
+            if ((value & 0x01) == 0x01) { // A transição 00 -> 01 faz o latch
+                rtcLatchedTime = System.currentTimeMillis(); // Trava o tempo atual para leitura consistente
+                // Uma implementação mais precisa travaria os valores dos contadores internos
+            }
+        }
+    }
+
+    @Override
+    protected int readRamBank(int address) {
+        if (ramBankOrRtcRegister >= 0x08 && ramBankOrRtcRegister <= 0x0C) { // Acesso ao RTC
+            return rtcRegisters[ramBankOrRtcRegister - 0x08] & 0xFF;
+        } else if (ramBankOrRtcRegister <= 0x03) { // Acesso à RAM
+            int bank = ramBankOrRtcRegister;
+            int mappedAddress = (bank * 0x2000) + (address & 0x1FFF);
+            if (ramData != null && mappedAddress < ramData.length) {
+                return ramData[mappedAddress] & 0xFF;
+            }
+        }
+        return 0xFF;
+    }
+
+    @Override
+    protected void writeRamBank(int address, byte value) {
+        if (ramBankOrRtcRegister >= 0x08 && ramBankOrRtcRegister <= 0x0C) { // Escreve no RTC
+            rtcRegisters[ramBankOrRtcRegister - 0x08] = value;
+        } else if (ramBankOrRtcRegister <= 0x03) { // Escreve na RAM
+            int bank = ramBankOrRtcRegister;
+            int mappedAddress = (bank * 0x2000) + (address & 0x1FFF);
+            if (ramData != null && mappedAddress < ramData.length) {
+                ramData[mappedAddress] = value;
+            }
+        }
+    }
+
+    private long getRtcSeconds() {
+        long days = ((rtcRegisters[4] & 1) << 8) | (rtcRegisters[3] & 0xFF);
+        return rtcRegisters[0] + (rtcRegisters[1] * 60) + (rtcRegisters[2] * 3600) + (days * 86400);
+    }
+
+    private void setRtcSeconds(long totalSeconds) {
+        long days = totalSeconds / 86400;
+        totalSeconds %= 86400;
+        long hours = totalSeconds / 3600;
+        totalSeconds %= 3600;
+        long minutes = totalSeconds / 60;
+        long seconds = totalSeconds % 60;
+
+        rtcRegisters[0] = (byte) seconds;
+        rtcRegisters[1] = (byte) minutes;
+        rtcRegisters[2] = (byte) hours;
+        rtcRegisters[3] = (byte) (days & 0xFF);
+        rtcRegisters[4] &= 0xFE; // Limpa o bit 0 (bit 8 dos dias)
+        rtcRegisters[4] |= (byte) ((days >> 8) & 1); // Seta o bit 8
+        if (days > 511) { // Se o contador de dias estourou
+            rtcRegisters[4] |= 0x80; // Seta o Carry bit
+        }
+    }
+}
+
+
+// =========================================================================
+// MBC 5
+// =========================================================================
+class MBC5 extends AbstractMBC {
+    private int romBank = 1; // Pode ser de 0 a 511
+    private int ramBank = 0; // Pode ser de 0 a 15
+
+    public MBC5(byte[] romData, int ramSizeCode) {
+        super(romData, ramSizeCode);
+    }
+
+    @Override
+    public int read(int address) {
+        if (address >= 0x0000 && address <= 0x3FFF) {
+            return romData[address] & 0xFF; // Banco 0 sempre fixo
+        } else if (address >= 0x4000 && address <= 0x7FFF) {
+            int mappedAddress = (romBank * 0x4000) + (address - 0x4000);
+            if (mappedAddress < romData.length) {
+                return romData[mappedAddress] & 0xFF;
+            }
+        }
+        return 0xFF;
+    }
+
+    @Override
+    public void write(int address, byte value) {
+        if (address >= 0x0000 && address <= 0x1FFF) { // RAM Enable
+            ramEnabled = (value & 0x0F) == 0x0A;
+        } else if (address >= 0x2000 && address <= 0x2FFF) { // ROM Bank (8 bits de baixo)
+            romBank = (romBank & 0x100) | (value & 0xFF);
+        } else if (address >= 0x3000 && address <= 0x3FFF) { // ROM Bank (9º bit)
+            romBank = (romBank & 0x0FF) | ((value & 0x01) << 8);
+        } else if (address >= 0x4000 && address <= 0x5FFF) { // RAM Bank
+            ramBank = value & 0x0F; // TODO: Lógica de Rumble
+        }
+    }
+
+    @Override
+    protected int readRamBank(int address) {
+        int mappedAddress = (ramBank * 0x2000) + (address & 0x1FFF);
+        if (ramData != null && mappedAddress < ramData.length) {
+            return ramData[mappedAddress] & 0xFF;
+        }
+        return 0xFF;
+    }
+
+    @Override
+    protected void writeRamBank(int address, byte value) {
+        int mappedAddress = (ramBank * 0x2000) + (address & 0x1FFF);
+        if (ramData != null && mappedAddress < ramData.length) {
+            ramData[mappedAddress] = value;
+        }
     }
 }
 
