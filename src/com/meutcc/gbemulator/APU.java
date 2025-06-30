@@ -578,7 +578,7 @@ public class APU {
 
         // Frequency/Period
         private int frequencyValue; // 11-bit value from NRx3, NRx4
-        private int periodTimer;    // Counts down at CPU_CLOCK_SPEED / 4 (1MHz for sound gen)
+        private double periodTimer;    // Counts down at CPU_CLOCK_SPEED / 4 (1MHz for sound gen)
         // Or, simpler: counts down based on output sample rate and desired freq.
 
         // Duty Cycle
@@ -756,26 +756,58 @@ public class APU {
         }
 
 
+        // Dentro da classe APU.java, na subclasse PulseChannel
+
         @Override
-        public void stepSampleGenerator() { // Chamado uma vez por amostra de saída de áudio
-            if (!enabled || frequencyValue >= 2047) return;
+        public void stepSampleGenerator() {
+            if (!enabled) return;
 
-            // Recalcular se a frequência mudou (idealmente feito quando NRx3/NRx4 são escritos)
-            // Para simplificar, fazemos aqui, mas pode ser ineficiente.
-            // Frequência do timer que avança o dutyStep: (CPU_CLOCK_SPEED / 8.0)
-            // Período do dutyStep em unidades desse timer: (2048.0 - frequencyValue)
-            double ticksPerDutyStep = (2048.0 - frequencyValue);
-            if (ticksPerDutyStep <= 0) return; // Evita divisão por zero / comportamento estranho
+            // O timer do canal de pulso é decrementado com base nos ciclos da CPU.
+            // O clock do timer do canal é (CPU_CLOCK_SPEED / 8) ou ~524kHz.
+            // Cada passo do duty cycle dura (2048 - frequencyValue) ticks deste clock.
+            // Para simplificar a integração com o loop principal, podemos pensar em termos de
+            // um contador que representa o timer do hardware.
 
-            // Quantos ticks do clock de 524kHz (CPU/8) cabem em um período de amostra de áudio?
-            double apuChannelClockTicksPerAudioSample = (APU.CPU_CLOCK_SPEED / 8.0) / APU.SAMPLE_RATE;
+            // No seu loop principal da APU, você já tem o CYCLES_PER_OUTPUT_SAMPLE.
+            // Vamos usar isso para decrementar nosso timer.
+            // Um T-cycle da CPU equivale a um tick do clock principal.
+            // O timer de frequência do canal de pulso é decrementado a cada 4 T-cycles.
 
-            // dutyStepTimer agora acumula esses ticks.
-            dutyStepTimer -= apuChannelClockTicksPerAudioSample; // Contagem regressiva
+            // A lógica aqui é complexa de mapear diretamente para um único step por amostra.
+            // Uma abordagem mais correta é ter o loop de update da APU passando os ciclos para cada canal.
+            // Mas para adaptar sua estrutura atual, vamos fazer uma aproximação:
 
-            while (dutyStepTimer <= 0) {
-                dutyStepTimer += ticksPerDutyStep; // Recarrega o timer para o próximo duty step
-                dutyStep = (dutyStep + 1) % 8;
+            // Esta é uma correção crucial. Substitua seu `periodTimer` por esta lógica.
+            // 'periodTimer' agora atua como um contador regressivo.
+            periodTimer -= 1; // Simplificação: assume um step por amostra gerada. Lógica mais precisa abaixo.
+
+            // Lógica mais precisa:
+            // A frequência do gerador de onda é f = 131072 / (2048 - x) Hz
+            // O período da onda é T = (2048 - x) / 131072 segundos.
+            // O período de uma ÚNICA etapa do duty (são 8 etapas) é T / 8.
+            // segundos_por_etapa_duty = (2048 - frequencyValue) / (131072.0 * 8.0)
+            // amostras_por_etapa_duty = segundos_por_etapa_duty * SAMPLE_RATE
+
+            if (frequencyValue >= 2047) return; // Canal efetivamente desligado
+
+            double samplesPerDutyStep = ((2048.0 - frequencyValue) / 1048576.0) * SAMPLE_RATE;
+
+            if (samplesPerDutyStep == 0) return; // Evita problemas se a frequência for muito alta
+
+            // Usando um acumulador de fase (melhor abordagem)
+            // 'periodTimer' será nosso acumulador de fase agora (mude para double)
+            // private double phaseAccumulator = 0.0;
+
+            // A quantidade de "passos de duty" que ocorreram em uma amostra de áudio
+            double dutyStepsPerSample = 1.0 / samplesPerDutyStep;
+
+            // `periodTimer` agora é o acumulador de fase. Declare como double na classe.
+            periodTimer += dutyStepsPerSample;
+
+            if (periodTimer >= 1.0) {
+                int stepsToAdvance = (int)periodTimer;
+                dutyStep = (dutyStep + stepsToAdvance) % 8;
+                periodTimer -= stepsToAdvance; // ou periodTimer %= 1.0;
             }
         }
 // E no trigger, inicializar dutyStepTimer para ticksPerDutyStep:
