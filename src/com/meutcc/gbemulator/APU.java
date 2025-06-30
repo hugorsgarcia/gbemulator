@@ -619,7 +619,7 @@ public class APU {
             envelopeCounter = 0;
 
             frequencyValue = 0;
-            periodTimer = 0;
+            periodTimer = 0.0;
             dutyPattern = 0;
             dutyStep = 0;
 
@@ -830,7 +830,7 @@ public class APU {
     // ========================================================================
     static class WaveChannel extends SoundChannel {
         private int frequencyValue;
-        private int periodTimer;
+        private double periodTimer;
         private int waveRamPosition; // 0-31, current sample in wave RAM
         private byte currentSampleBuffer; // Holds two 4-bit samples from wave RAM
 
@@ -849,7 +849,7 @@ public class APU {
             lengthEnabled = false;
             volumeShiftCode = 0; // Muted
             frequencyValue = 0;
-            periodTimer = 0;
+            periodTimer = 0.0;
             waveRamPosition = 0;
             currentSampleBuffer = 0;
         }
@@ -899,7 +899,7 @@ public class APU {
             waveRamPosition = 0; // Restart wave playback from the beginning
             // Period timer reset for frequency
             // Wave timer period is (2048 - frequencyValue) * 2 APU clock cycles (1MHz ticks)
-            periodTimer = (2048 - frequencyValue) * 2; // Placeholder
+            periodTimer = 0.0; // Placeholder
         }
 
         @Override

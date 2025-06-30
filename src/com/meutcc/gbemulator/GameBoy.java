@@ -48,11 +48,18 @@ public class GameBoy {
         if (cycles == -1) return -1;
 
         ppu.update(cycles);
+        mmu.updateTimers(cycles); // <-- Você já tem isso, ótimo!
+
+        // --- ADICIONE ESTA LINHA ---
+        cartridge.update(cycles); // Para atualizar lógicas internas do cartucho, como o RTC
+        // ---------------------------
+
         if (this.emulatorSoundGloballyEnabled && apu != null) {
             apu.update(cycles);
         }
-        mmu.updateTimers(cycles); // <-- CHAMADA PARA ATUALIZAR OS TIMERS
-        cpu.handleInterrupts();
+
+        // A chamada a handleInterrupts foi movida para dentro do CPU.step() na sua versão, mantenha assim.
+        // cpu.handleInterrupts(); <-- Se estiver aqui, pode remover. Se estiver no CPU.step(), está ok.
 
         return cycles;
     }
