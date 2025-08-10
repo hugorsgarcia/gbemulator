@@ -231,12 +231,11 @@ public class MMU {
 
             case REG_KEY1: return memory[REG_KEY1] & 0xFF;
 
-            case int n when (n >= 0xFF10 && n <= 0xFF26):
-                return apu.readRegister(address);
-            case int n when (n >= 0xFF30 && n <= 0xFF3F):
-                return apu.readRegister(address);
-
             default:
+                // Registradores de áudio APU
+                if ((address >= 0xFF10 && address <= 0xFF26) || (address >= 0xFF30 && address <= 0xFF3F)) {
+                    return apu.readRegister(address);
+                }
                 return 0xFF;
         }
     }
@@ -298,15 +297,13 @@ public class MMU {
                 memory[address] = value;
                 break;
 
-            case int n when (n >= 0xFF10 && n <= 0xFF26):
-                apu.writeRegister(address, value);
-                break;
-            case int n when (n >= 0xFF30 && n <= 0xFF3F):
-                apu.writeRegister(address, value);
-                break;
-
             default:
-                memory[address] = value; // Comportamento padrão para registradores não especiais
+                // Registradores de áudio APU
+                if ((address >= 0xFF10 && address <= 0xFF26) || (address >= 0xFF30 && address <= 0xFF3F)) {
+                    apu.writeRegister(address, value);
+                } else {
+                    memory[address] = value; // Comportamento padrão para registradores não especiais
+                }
                 break;
         }
     }

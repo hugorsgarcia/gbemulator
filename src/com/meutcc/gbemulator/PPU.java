@@ -1,8 +1,44 @@
 package com.meutcc.gbemulator;
 
-import java.util.Arrays;
+import java.util.*;
 
 public class PPU {
+    // Classe interna para representar um pixel com índice de cor e informações de prioridade
+    private static class PixelInfo {
+        int colorIndex;      // Índice de cor (0-3)
+        boolean fromSprite;  // Se o pixel veio de um sprite
+        boolean spritePriority; // Se o sprite tem prioridade sobre BG/Window (bit 7 do sprite)
+        int paletteRegister; // Registrador de paleta usado (bgp, obp0, obp1)
+        
+        PixelInfo(int colorIndex, boolean fromSprite, boolean spritePriority, int paletteRegister) {
+            this.colorIndex = colorIndex;
+            this.fromSprite = fromSprite;
+            this.spritePriority = spritePriority;
+            this.paletteRegister = paletteRegister;
+        }
+        
+        PixelInfo() {
+            this(0, false, false, 0);
+        }
+    }
+
+    // Classe interna para representar um sprite visível na scanline
+    private static class VisibleSprite {
+        int spriteIndex;    // Índice do sprite na OAM (0-39)
+        int spriteX;        // Coordenada X do sprite
+        int spriteY;        // Coordenada Y do sprite
+        int tileIndex;      // Índice do tile do sprite
+        int attributes;     // Atributos do sprite
+        
+        VisibleSprite(int spriteIndex, int spriteX, int spriteY, int tileIndex, int attributes) {
+            this.spriteIndex = spriteIndex;
+            this.spriteX = spriteX;
+            this.spriteY = spriteY;
+            this.tileIndex = tileIndex;
+            this.attributes = attributes;
+        }
+    }
+
     // Resolução da tela do Game Boy
     public static final int SCREEN_WIDTH = 160;
     public static final int SCREEN_HEIGHT = 144;
@@ -200,34 +236,39 @@ public class PPU {
     private void renderScanline() {
         if (!isLcdEnabled()) return;
 
-        int[] scanlinePixels = new int[SCREEN_WIDTH]; // Pixels para a linha atual
+        PixelInfo[] scanlinePixelInfo = new PixelInfo[SCREEN_WIDTH]; // Informações dos pixels para a linha atual
+        
+        // Inicializa array de pixels
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            scanlinePixelInfo[x] = new PixelInfo();
+        }
 
         // 1. Renderizar Background (se habilitado)
         if (isBgWindowDisplayEnabled()) { // Bit 0 do LCDC (BG/Window display)
-            renderBackgroundScanline(scanlinePixels);
+            renderBackgroundScanlineWithInfo(scanlinePixelInfo);
         } else {
-            // Se BG/Window está desabilitado, a tela é branca (cor 0)
+            // Se BG/Window está desabilitado, todos os pixels são cor 0 (branco)
             for (int x = 0; x < SCREEN_WIDTH; x++) {
-                scanlinePixels[x] = getColorFromPalette(0, bgp);
+                scanlinePixelInfo[x] = new PixelInfo(0, false, false, bgp);
             }
         }
 
         // 2. Renderizar Window (se habilitada e visível na scanline atual)
         if (isWindowDisplayEnabled() && isBgWindowDisplayEnabled()) { // Bit 5 e Bit 0 do LCDC
-            renderWindowScanline(scanlinePixels);
+            renderWindowScanlineWithInfo(scanlinePixelInfo);
         }
 
         // 3. Renderizar Sprites (se habilitados)
         if (isSpriteDisplayEnabled()) { // Bit 1 do LCDC
-            renderSpritesScanline(scanlinePixels);
+            renderSpritesScanlineWithInfo(scanlinePixelInfo);
         }
 
-        // Copia os pixels da scanline para o buffer de frame principal
-        // (y * width + x)
+        // 4. Converter índices de cor para cores RGB finais e colocar no buffer de tela
         int baseIndex = ly * SCREEN_WIDTH;
         for (int x = 0; x < SCREEN_WIDTH; x++) {
             if (baseIndex + x < screenBuffer.length) { // Proteção de bounds
-                screenBuffer[baseIndex + x] = scanlinePixels[x];
+                PixelInfo pixel = scanlinePixelInfo[x];
+                screenBuffer[baseIndex + x] = getColorFromPalette(pixel.colorIndex, pixel.paletteRegister);
             }
         }
     }
@@ -284,6 +325,61 @@ public class PPU {
             int colorIndex = (colorBit1 << 1) | colorBit0; // 00, 01, 10, 11
 
             scanlinePixels[x] = getColorFromPalette(colorIndex, bgp);
+        }
+    }
+
+    private void renderBackgroundScanlineWithInfo(PixelInfo[] scanlinePixelInfo) {
+        // LCDC Bit 4: BG Tile Data Select (0=0x8800-0x97FF, 1=0x8000-0x8FFF)
+        // LCDC Bit 3: BG Tile Map Display Select (0=0x9800-0x9BFF, 1=0x9C00-0x9FFF)
+        int tileDataArea = (lcdc & 0x10) != 0 ? 0x8000 : 0x8800;
+        boolean signedAddressing = (tileDataArea == 0x8800); // Se 0x8800, o índice do tile é signed byte
+        int tileMapArea = (lcdc & 0x08) != 0 ? 0x9C00 : 0x9800;
+
+        // Posição Y no mapa de tiles do background (considerando o scroll SCY)
+        // O mapa de tiles tem 32x32 tiles. Cada tile tem 8x8 pixels.
+        // O background "real" tem 256x256 pixels.
+        int yInBgMap = (ly + scy) & 0xFF; // Y atual + scroll Y, dentro do mapa de 256 pixels
+        int tileRowInMap = yInBgMap / 8;  // Linha do tile no mapa de 32x32 tiles
+        int yInTile = yInBgMap % 8;       // Linha do pixel dentro do tile (0-7)
+
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            int xInBgMap = (x + scx) & 0xFF; // X atual + scroll X, dentro do mapa de 256 pixels
+            int tileColInMap = xInBgMap / 8;  // Coluna do tile no mapa de 32x32 tiles
+            int xInTile = xInBgMap % 8;       // Coluna do pixel dentro do tile (0-7)
+
+            // Endereço do índice do tile no mapa de tiles
+            int tileMapOffset = tileRowInMap * 32 + tileColInMap;
+            int tileIndexAddress = tileMapArea + tileMapOffset;
+            int tileIndex = vram[tileIndexAddress - 0x8000] & 0xFF;
+
+            // Endereço do tile na VRAM
+            int tileAddress;
+            if (signedAddressing) {
+                // Índice é um byte assinado (-128 a 127), relativo a 0x9000
+                tileAddress = tileDataArea + ((byte)tileIndex * 16); // Cada tile tem 16 bytes
+            } else {
+                // Índice é um byte não assinado (0 a 255), relativo ao início da tileDataArea
+                tileAddress = tileDataArea + (tileIndex * 16);
+            }
+
+            // Cada tile tem 8 linhas, cada linha tem 2 bytes
+            // Byte 1: bits menos significativos das cores
+            // Byte 2: bits mais significativos das cores
+            int tileRowDataAddress = tileAddress + (yInTile * 2);
+            if (tileRowDataAddress < 0x8000 || tileRowDataAddress +1 >= 0xA000) continue; // Fora da VRAM
+
+            int lsb = vram[tileRowDataAddress - 0x8000] & 0xFF;
+            int msb = vram[tileRowDataAddress + 1 - 0x8000] & 0xFF;
+
+            // Extrai a cor do pixel (2 bits)
+            // Os pixels são armazenados da esquerda para a direita, bit 7 é o mais à esquerda.
+            // Para pegar o bit correto, invertemos xInTile (7-xInTile)
+            int bitPosition = 7 - xInTile;
+            int colorBit0 = (lsb >> bitPosition) & 1;
+            int colorBit1 = (msb >> bitPosition) & 1;
+            int colorIndex = (colorBit1 << 1) | colorBit0; // 00, 01, 10, 11
+
+            scanlinePixelInfo[x] = new PixelInfo(colorIndex, false, false, bgp);
         }
     }
 
@@ -346,6 +442,69 @@ public class PPU {
             // Outras cores da janela sobrescrevem o background.
             if (colorIndex != 0) {
                 scanlinePixels[x] = getColorFromPalette(colorIndex, bgp); // Window usa BGP
+            }
+        }
+    }
+
+    private void renderWindowScanlineWithInfo(PixelInfo[] scanlinePixelInfo) {
+        // A janela só é exibida se ly >= WY
+        if (ly < wy) return;
+
+        // LCDC Bit 6: Window Tile Map Display Select (0=0x9800-0x9BFF, 1=0x9C00-0x9FFF)
+        // LCDC Bit 4: BG/Window Tile Data Select (mesmo que o BG)
+        int tileDataArea = (lcdc & 0x10) != 0 ? 0x8000 : 0x8800;
+        boolean signedAddressing = (tileDataArea == 0x8800);
+        int tileMapArea = (lcdc & 0x40) != 0 ? 0x9C00 : 0x9800;
+
+        // WX é a coordenada X da janela - 7.
+        // Se WX < 7, a janela começa na borda esquerda.
+        int actualWX = wx - 7;
+
+        // Posição Y na janela
+        int yInWindow = ly - wy; // Linha atual relativa ao topo da janela
+        int tileRowInMap = yInWindow / 8;
+        int yInTile = yInWindow % 8;
+
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            // A janela só cobre pixels onde x >= WX'
+            if (x < actualWX) continue;
+
+            int xInWindow = x - actualWX; // Coordenada X relativa à borda esquerda da janela
+            int tileColInMap = xInWindow / 8;
+            int xInTile = xInWindow % 8;
+
+            // Se a coluna do tile for > 31, não há mais tiles da janela nessa linha.
+            if (tileColInMap >= 32) continue;
+
+            int tileMapOffset = tileRowInMap * 32 + tileColInMap;
+            int tileIndexAddress = tileMapArea + tileMapOffset;
+
+            // Proteção de bounds para tileIndexAddress dentro da VRAM
+            if (tileIndexAddress < 0x8000 || tileIndexAddress >= 0xA000) continue;
+            int tileIndex = vram[tileIndexAddress - 0x8000] & 0xFF;
+
+            int tileAddress;
+            if (signedAddressing) {
+                tileAddress = tileDataArea + ((byte)tileIndex * 16);
+            } else {
+                tileAddress = tileDataArea + (tileIndex * 16);
+            }
+
+            int tileRowDataAddress = tileAddress + (yInTile * 2);
+            if (tileRowDataAddress < 0x8000 || tileRowDataAddress +1 >= 0xA000) continue;
+
+            int lsb = vram[tileRowDataAddress - 0x8000] & 0xFF;
+            int msb = vram[tileRowDataAddress + 1 - 0x8000] & 0xFF;
+
+            int bitPosition = 7 - xInTile;
+            int colorBit0 = (lsb >> bitPosition) & 1;
+            int colorBit1 = (msb >> bitPosition) & 1;
+            int colorIndex = (colorBit1 << 1) | colorBit0;
+
+            // Cor 0 da janela é transparente para o background.
+            // Outras cores da janela sobrescrevem o background.
+            if (colorIndex != 0) {
+                scanlinePixelInfo[x] = new PixelInfo(colorIndex, false, false, bgp); // Window usa BGP
             }
         }
     }
@@ -447,6 +606,113 @@ public class PPU {
                     }
                 }
             }
+        }
+    }
+
+    private void renderSpritesScanlineWithInfo(PixelInfo[] scanlinePixelInfo) {
+        // LCDC Bit 2: Sprite Size (0=8x8, 1=8x16)
+        boolean tallSprites = (lcdc & 0x04) != 0;
+        int spriteHeight = tallSprites ? 16 : 8;
+
+        // Lista de sprites visíveis na scanline atual
+        List<VisibleSprite> visibleSprites = new ArrayList<>();
+
+        // 1. Encontrar todos os sprites visíveis na scanline atual
+        for (int i = 0; i < 40; i++) {
+            int oamAddr = i * 4; // Cada sprite tem 4 bytes na OAM
+
+            int spriteY = (oam[oamAddr] & 0xFF) - 16; // Y-coord do topo do sprite
+            int spriteX = (oam[oamAddr + 1] & 0xFF) - 8;  // X-coord da esquerda do sprite
+            int tileIndex = oam[oamAddr + 2] & 0xFF;
+            int attributes = oam[oamAddr + 3] & 0xFF;
+
+            // Sprite está na scanline atual?
+            if (ly >= spriteY && ly < (spriteY + spriteHeight)) {
+                // Sprite está visível horizontalmente? (pelo menos parcialmente)
+                if (spriteX > -8 && spriteX < SCREEN_WIDTH) {
+                    visibleSprites.add(new VisibleSprite(i, spriteX, spriteY, tileIndex, attributes));
+                }
+            }
+        }
+
+        // 2. Ordenar sprites por coordenada X (prioridade: menor X primeiro)
+        visibleSprites.sort((a, b) -> {
+            if (a.spriteX != b.spriteX) {
+                return Integer.compare(a.spriteX, b.spriteX);
+            }
+            // Se X é igual, prioridade é pelo índice na OAM (menor índice primeiro)
+            return Integer.compare(a.spriteIndex, b.spriteIndex);
+        });
+
+        // 3. Renderizar apenas os 10 primeiros sprites
+        int spritesRendered = 0;
+        for (VisibleSprite sprite : visibleSprites) {
+            if (spritesRendered >= 10) break;
+            
+            boolean yFlip = (sprite.attributes & 0x40) != 0;
+            boolean xFlip = (sprite.attributes & 0x20) != 0;
+            boolean bgPriority = (sprite.attributes & 0x80) != 0; // 0: Sprite sobre BG/Win, 1: Sprite atrás de BG/Win cores 1-3
+            int paletteReg = (sprite.attributes & 0x10) != 0 ? obp1 : obp0;
+
+            int tileIndex = sprite.tileIndex;
+            // Para sprites 8x16, o tileIndex do tile inferior é tileIndex | 1
+            // e o tileIndex do tile superior é tileIndex & 0xFE
+            if (tallSprites) {
+                tileIndex &= 0xFE; // Ignora o bit 0 para o tile superior
+            }
+
+            int yInSpriteTile = ly - sprite.spriteY;
+            if (yFlip) {
+                yInSpriteTile = (spriteHeight - 1) - yInSpriteTile;
+            }
+
+            // Se for 8x16 e estamos na metade inferior do sprite
+            if (tallSprites && yInSpriteTile >= 8) {
+                tileIndex |= 0x01; // Usa o tile inferior
+                yInSpriteTile -= 8;  // Ajusta y para o tile inferior
+            }
+
+            int tileAddress = 0x8000 + (tileIndex * 16); // Sprites sempre usam 0x8000-0x8FFF
+            int tileRowDataAddress = tileAddress + (yInSpriteTile * 2);
+
+            if (tileRowDataAddress < 0x8000 || tileRowDataAddress +1 >= 0xA000) continue;
+
+            int lsb = vram[tileRowDataAddress - 0x8000] & 0xFF;
+            int msb = vram[tileRowDataAddress + 1 - 0x8000] & 0xFF;
+
+            // Desenha os 8 pixels do sprite na linha
+            for (int px = 0; px < 8; px++) {
+                int screenX = sprite.spriteX + px;
+                if (screenX >= 0 && screenX < SCREEN_WIDTH) { // Dentro da tela
+                    int xInTilePixel = xFlip ? (7 - px) : px;
+
+                    int bitPosition = 7 - xInTilePixel;
+                    int colorBit0 = (lsb >> bitPosition) & 1;
+                    int colorBit1 = (msb >> bitPosition) & 1;
+                    int colorIndex = (colorBit1 << 1) | colorBit0;
+
+                    if (colorIndex == 0) continue; // Cor 0 é transparente para sprites
+
+                    // Aplicar lógica de prioridade correta
+                    PixelInfo currentPixel = scanlinePixelInfo[screenX];
+                    
+                    // Se bgPriority está ativo, sprite só aparece se o pixel do BG/Window for cor 0
+                    if (bgPriority) {
+                        boolean bgEnabled = isBgWindowDisplayEnabled();
+                        if (bgEnabled && currentPixel.colorIndex != 0) {
+                            continue; // BG/Window tem prioridade, sprite é ocultado
+                        }
+                    }
+                    
+                    // Se chegou aqui, o sprite pode ser desenhado
+                    // Sprites posteriores não sobrescrevem sprites anteriores (que já foram desenhados)
+                    if (!currentPixel.fromSprite) {
+                        scanlinePixelInfo[screenX] = new PixelInfo(colorIndex, true, bgPriority, paletteReg);
+                    }
+                }
+            }
+            
+            spritesRendered++;
         }
     }
 
@@ -567,11 +833,12 @@ public class PPU {
     public int getWx() { return wx; }
     public void setWx(int value) { this.wx = value & 0xFF; }
 
-    // --- Acesso à VRAM e OAM pela MMU ---
+    // --- Acesso à VRAM e OAM pela MMU com restrições implementadas ---
     public byte readVRAM(int address) {
-        // A VRAM só é acessível pela CPU quando a PPU não está no modo 3 (Drawing)
-        // Simplificação: permitimos sempre por enquanto.
-        // if (ppuMode == 3 && isLcdEnabled()) return (byte)0xFF; // VRAM inacessível
+        // Restrição de acesso: VRAM não pode ser acessada durante Drawing (modo 3) quando LCD está ligado
+        if (isLcdEnabled() && ppuMode == 3) {
+            return (byte) 0xFF; // VRAM inacessível durante Drawing
+        }
         if (address >= 0 && address < vram.length) {
             return vram[address];
         }
@@ -579,16 +846,20 @@ public class PPU {
     }
 
     public void writeVRAM(int address, byte value) {
-        // if (ppuMode == 3 && isLcdEnabled()) return; // VRAM inacessível
+        // Restrição de acesso: VRAM não pode ser escrita durante Drawing (modo 3) quando LCD está ligado
+        if (isLcdEnabled() && ppuMode == 3) {
+            return; // VRAM inacessível durante Drawing
+        }
         if (address >= 0 && address < vram.length) {
             vram[address] = value;
         }
     }
 
     public byte readOAM(int address) {
-        // A OAM só é acessível pela CPU quando a PPU não está nos modos 2 (OAM Scan) ou 3 (Drawing)
-        // Simplificação: permitimos sempre.
-        // if ((ppuMode == 2 || ppuMode == 3) && isLcdEnabled()) return (byte)0xFF; // OAM inacessível
+        // Restrição de acesso: OAM não pode ser acessada durante OAM Scan (modo 2) ou Drawing (modo 3) quando LCD está ligado
+        if (isLcdEnabled() && (ppuMode == 2 || ppuMode == 3)) {
+            return (byte) 0xFF; // OAM inacessível durante OAM Scan e Drawing
+        }
         if (address >= 0 && address < oam.length) {
             return oam[address];
         }
@@ -596,7 +867,10 @@ public class PPU {
     }
 
     public void writeOAM(int address, byte value) {
-        // if ((ppuMode == 2 || ppuMode == 3) && isLcdEnabled()) return; // OAM inacessível
+        // Restrição de acesso: OAM não pode ser escrita durante OAM Scan (modo 2) ou Drawing (modo 3) quando LCD está ligado
+        if (isLcdEnabled() && (ppuMode == 2 || ppuMode == 3)) {
+            return; // OAM inacessível durante OAM Scan e Drawing
+        }
         if (address >= 0 && address < oam.length) {
             oam[address] = value;
         }
