@@ -42,6 +42,14 @@ public class PPU {
     // Resolução da tela do Game Boy
     public static final int SCREEN_WIDTH = 160;
     public static final int SCREEN_HEIGHT = 144;
+    
+    // Timing preciso da PPU (em T-cycles)
+    public static final int MODE_2_CYCLES = 80;     // OAM Scan
+    public static final int MODE_3_BASE_CYCLES = 172; // Drawing base
+    public static final int MODE_3_MAX_CYCLES = 289;  // Drawing máximo
+    public static final int SCANLINE_CYCLES = 456;   // Total por scanline
+    public static final int VBLANK_LINES = 10;       // Linhas 144-153
+    public static final int TOTAL_LINES = 154;       // 0-153
 
     // Memória da PPU
     private final byte[] vram = new byte[8192]; // 8KB (0x8000-0x9FFF)
@@ -79,6 +87,9 @@ public class PPU {
     // Estado interno da PPU
     private int ppuMode; // 0: HBlank, 1: VBlank, 2: OAM Scan, 3: Drawing
     private int cyclesCounter; // Contador de ciclos para o modo atual da PPU
+    private int scanlineCycles; // Ciclos acumulados na scanline atual (para timing preciso)
+    private boolean statInterruptLine; // Estado da linha de interrupção STAT (para edge detection)
+    private int mode3Duration; // Duração calculada do modo 3 para scanline atual
 
     private MMU mmu; // Referência à MMU para solicitar interrupções
 
@@ -110,113 +121,237 @@ public class PPU {
 
         ppuMode = 2; // Inicia em modo OAM Scan para a primeira linha
         cyclesCounter = 0;
+        scanlineCycles = 0;
+        statInterruptLine = false;
+        mode3Duration = MODE_3_BASE_CYCLES;
         System.out.println("PPU reset.");
     }
 
     // Atualiza o estado da PPU com base nos ciclos da CPU
     public void update(int cpuCycles) {
         if (!isLcdEnabled()) {
-            // Se LCD está desligado, PPU está inativa, LY é 0, modo é 0 (HBlank) ou 1 (VBlank).
-            // O comportamento exato do LCD desligado é complexo (timing, acesso a VRAM/OAM).
-            // Simplificação: Se LCD desligado, não fazemos nada, LY=0.
-            // A VRAM pode ser acessada, OAM não.
-            ly = 0;
-            ppuMode = 1; // Ou 0, dependendo da especificação. VBlank é mais seguro.
-            cyclesCounter = 0;
-            // Atualizar STAT e LY na MMU
-            mmu.writeByte(MMU.REG_LY, ly);
-            updateStatRegister();
+            handleLcdDisabled();
             return;
         }
 
-        cyclesCounter += cpuCycles;
-
-        switch (ppuMode) {
-            case 2: // OAM Scan (Procurando sprites na linha atual) - Dura 80 ciclos
-                if (cyclesCounter >= 80) {
-                    cyclesCounter -= 80; // ou cyclesCounter = cyclesCounter % 80
-                    ppuMode = 3; // Muda para modo de desenho
-                    updateStatRegister();
-                }
-                break;
-
-            case 3: // Drawing Pixels (Transferindo para LCD) - Dura ~172-289 ciclos (varia)
-                // Simplificação: usaremos um valor fixo, por exemplo, 172
-                if (cyclesCounter >= 172) { // Duração mínima
-                    cyclesCounter -= 172;
-                    ppuMode = 0; // Muda para HBlank
-                    updateStatRegister();
-                    // Renderiza a scanline AQUI, pois os dados estão prontos
-                    if (ly < SCREEN_HEIGHT) { // Só renderiza se estiver dentro da área visível
-                        renderScanline();
-                    }
-                    // Solicitar interrupção STAT Modo 0 (HBlank), se habilitada no STAT
-                    if ((stat & 0x08) != 0) requestLcdStatInterrupt();
-                }
-                break;
-
-            case 0: // HBlank (Horizontal Blank) - Dura o resto dos 456 ciclos da linha
-                // Total por linha = 456 ciclos. 80 (OAM) + 172 (Draw) = 252.
-                // Restante para HBlank = 456 - 252 = 204 ciclos.
-                if (cyclesCounter >= 204) {
-                    cyclesCounter -= 204;
-                    ly++; // Próxima scanline
-                    mmu.writeByte(MMU.REG_LY, ly); // Atualiza o registrador LY na MMU
-
-                    if (ly == SCREEN_HEIGHT) { // Chegou ao fim da tela visível
-                        ppuMode = 1; // Entra em VBlank
-                        updateStatRegister();
-                        frameCompleted = true; // Sinaliza que um frame está pronto
-                        // Solicitar interrupção VBlank (Bit 0 do IF)
-                        byte currentIF = (byte) mmu.readByte(MMU.REG_IF);
-                        mmu.writeByte(MMU.REG_IF, (byte) (currentIF | 0x01));
-                        // Solicitar interrupção STAT Modo 1 (VBlank), se habilitada no STAT
-                        if ((stat & 0x10) != 0) requestLcdStatInterrupt();
-
-                    } else { // Ainda desenhando linhas visíveis
-                        ppuMode = 2; // Volta para OAM Scan para a nova linha
-                        updateStatRegister();
-                        // Solicitar interrupção STAT Modo 2 (OAM), se habilitada no STAT
-                        if ((stat & 0x20) != 0) requestLcdStatInterrupt();
-                    }
-
-                    // Checa LYC=LY após LY ser incrementado
-                    checkLycEqualsLy();
-                }
-                break;
-
-            case 1: // VBlank (Vertical Blank) - Linhas 144-153. Cada linha dura 456 ciclos.
-                // VBlank dura 10 linhas * 456 ciclos/linha = 4560 ciclos.
-                if (cyclesCounter >= 456) { // Uma linha inteira de VBlank passou
-                    cyclesCounter -= 456;
-                    ly++;
-                    mmu.writeByte(MMU.REG_LY, ly); // Atualiza LY
-
-                    if (ly > 153) { // Fim do VBlank (após linha 153)
-                        ly = 0; // Reseta para primeira scanline
-                        mmu.writeByte(MMU.REG_LY, ly);
-                        ppuMode = 2; // Começa novo frame com OAM Scan
-                        updateStatRegister();
-                        // Solicitar interrupção STAT Modo 2 (OAM), se habilitada no STAT
-                        if ((stat & 0x20) != 0) requestLcdStatInterrupt();
-                    }
-                    // Checa LYC=LY durante VBlank também
-                    checkLycEqualsLy();
-                }
-                break;
+        // Processar ciclo por ciclo para timing preciso
+        for (int i = 0; i < cpuCycles; i++) {
+            updateSingleCycle();
         }
     }
-
-    private void checkLycEqualsLy() {
-        if (ly == lyc) {
-            stat |= 0x04; // Seta bit de coincidência LYC=LY no STAT
-            if ((stat & 0x40) != 0) { // Se interrupção de LYC=LY está habilitada
-                requestLcdStatInterrupt();
+    
+    /**
+     * Atualiza a PPU um ciclo por vez para timing preciso
+     */
+    private void updateSingleCycle() {
+        scanlineCycles++;
+        cyclesCounter++;
+        
+        // Processar baseado no modo atual
+        switch (ppuMode) {
+            case 2: // OAM Scan
+                updateOamScanMode();
+                break;
+            case 3: // Drawing
+                updateDrawingMode();
+                break;
+            case 0: // H-Blank
+                updateHBlankMode();
+                break;
+            case 1: // V-Blank
+                updateVBlankMode();
+                break;
+        }
+        
+        // Verificar interrupções STAT após cada ciclo
+        updateStatInterrupts();
+    }
+    
+    /**
+     * Gerencia LCD desabilitado
+     */
+    private void handleLcdDisabled() {
+        ly = 0;
+        ppuMode = 0; // H-Blank quando LCD desabilitado
+        cyclesCounter = 0;
+        scanlineCycles = 0;
+        statInterruptLine = false;
+        
+        mmu.writeByte(MMU.REG_LY, ly);
+        updateStatRegister();
+    }
+    
+    /**
+     * Modo 2: OAM Scan (80 ciclos)
+     */
+    private void updateOamScanMode() {
+        if (cyclesCounter >= MODE_2_CYCLES) {
+            cyclesCounter = 0;
+            ppuMode = 3;
+            
+            // Calcular duração do modo 3 baseado no conteúdo da scanline
+            calculateMode3Duration();
+            updateStatRegister();
+        }
+    }
+    
+    /**
+     * Modo 3: Drawing (172-289 ciclos variável)
+     */
+    private void updateDrawingMode() {
+        if (cyclesCounter >= mode3Duration) {
+            cyclesCounter = 0;
+            ppuMode = 0;
+            
+            // Renderizar a scanline quando modo 3 termina
+            if (ly < SCREEN_HEIGHT) {
+                renderScanline();
+            }
+            
+            updateStatRegister();
+        }
+    }
+    
+    /**
+     * Modo 0: H-Blank (resto dos 456 ciclos)
+     */
+    private void updateHBlankMode() {
+        if (scanlineCycles >= SCANLINE_CYCLES) {
+            // Fim da scanline
+            scanlineCycles = 0;
+            cyclesCounter = 0;
+            ly++;
+            
+            mmu.writeByte(MMU.REG_LY, ly);
+            
+            if (ly == SCREEN_HEIGHT) {
+                // Entrar em V-Blank
+                ppuMode = 1;
+                frameCompleted = true;
+                
+                // Solicitar interrupção V-Blank
+                requestVBlankInterrupt();
+            } else {
+                // Próxima scanline
+                ppuMode = 2;
+            }
+            
+            updateStatRegister();
+        }
+    }
+    
+    /**
+     * Modo 1: V-Blank (10 linhas × 456 ciclos)
+     */
+    private void updateVBlankMode() {
+        if (scanlineCycles >= SCANLINE_CYCLES) {
+            scanlineCycles = 0;
+            cyclesCounter = 0;
+            ly++;
+            
+            mmu.writeByte(MMU.REG_LY, ly);
+            
+            if (ly >= TOTAL_LINES) {
+                // Fim do V-Blank, reiniciar frame
+                ly = 0;
+                ppuMode = 2;
+                mmu.writeByte(MMU.REG_LY, ly);
+            }
+            
+            updateStatRegister();
+        }
+    }
+    
+    /**
+     * Calcula a duração do modo 3 baseado no conteúdo da scanline
+     */
+    private void calculateMode3Duration() {
+        int baseDuration = MODE_3_BASE_CYCLES;
+        int additionalCycles = 0;
+        
+        // Adicionar ciclos por sprites visíveis na scanline
+        if (isSpriteDisplayEnabled()) {
+            int visibleSprites = countSpritesOnScanline();
+            additionalCycles += visibleSprites; // ~1 ciclo adicional por sprite
+        }
+        
+        // Adicionar ciclos se window está ativa
+        if (isWindowDisplayEnabled() && ly >= wy && ly < wy + SCREEN_HEIGHT) {
+            additionalCycles += 6; // Window adiciona alguns ciclos
+        }
+        
+        // Scroll horizontal pode adicionar até 8 ciclos
+        if (scx % 8 != 0) {
+            additionalCycles += (8 - (scx % 8));
+        }
+        
+        mode3Duration = Math.min(baseDuration + additionalCycles, MODE_3_MAX_CYCLES);
+    }
+    
+    /**
+     * Conta sprites visíveis na scanline atual
+     */
+    private int countSpritesOnScanline() {
+        if (!isSpriteDisplayEnabled()) return 0;
+        
+        int spriteHeight = isSpriteSize8x16() ? 16 : 8;
+        int count = 0;
+        
+        for (int i = 0; i < 40 && count < 10; i++) { // Máximo 10 sprites por scanline
+            int spriteY = (oam[i * 4] & 0xFF) - 16;
+            if (ly >= spriteY && ly < spriteY + spriteHeight) {
+                count++;
+            }
+        }
+        
+        return count;
+    }
+    
+    /**
+     * Atualiza as interrupções STAT com detecção de borda
+     */
+    private void updateStatInterrupts() {
+        boolean newStatLine = false;
+        
+        // Verificar condições de interrupção STAT
+        if ((stat & 0x08) != 0 && ppuMode == 0) { // H-Blank interrupt
+            newStatLine = true;
+        }
+        
+        if ((stat & 0x10) != 0 && ppuMode == 1) { // V-Blank interrupt
+            newStatLine = true;
+        }
+        
+        if ((stat & 0x20) != 0 && ppuMode == 2) { // OAM interrupt
+            newStatLine = true;
+        }
+        
+        // LYC=LY interrupt
+        boolean lycEqualsLy = (ly == lyc);
+        if (lycEqualsLy) {
+            stat |= 0x04; // Set LYC=LY flag
+            if ((stat & 0x40) != 0) { // LYC=LY interrupt enabled
+                newStatLine = true;
             }
         } else {
-            stat &= ~0x04; // Reseta bit de coincidência
+            stat &= ~0x04; // Clear LYC=LY flag
         }
-        updateStatRegister(); // Garante que o registrador STAT na MMU está atualizado
+        
+        // Disparar interrupção apenas na borda de subida (edge detection)
+        if (newStatLine && !statInterruptLine) {
+            requestLcdStatInterrupt();
+        }
+        
+        statInterruptLine = newStatLine;
+        updateStatRegister();
+    }
+    
+    /**
+     * Solicita interrupção V-Blank
+     */
+    private void requestVBlankInterrupt() {
+        byte currentIF = (byte) mmu.readByte(MMU.REG_IF);
+        mmu.writeByte(MMU.REG_IF, (byte) (currentIF | 0x01)); // Bit 0: V-Blank
     }
 
     private void requestLcdStatInterrupt() {
@@ -784,6 +919,7 @@ public class PPU {
     public boolean isWindowDisplayEnabled() { return (lcdc & 0x20) != 0; } // Bit 5
     // Bit 4: BG & Window Tile Data Select (0=8800-97FF, 1=8000-8FFF)
     // Bit 3: BG Tile Map Display Select (0=9800-9BFF, 1=9C00-9FFF)
+    public boolean isSpriteSize8x16() { return (lcdc & 0x04) != 0; } // Bit 2
     public boolean isSpriteDisplayEnabled() { return (lcdc & 0x02) != 0; } // Bit 1
     public boolean isBgWindowDisplayEnabled() { return (lcdc & 0x01) != 0; } // Bit 0 (BG display no DMG, BG/Win master no CGB)
 
@@ -816,7 +952,10 @@ public class PPU {
     // LY é read-only para a CPU, apenas a PPU o modifica.
 
     public int getLyc() { return lyc; }
-    public void setLyc(int value) { this.lyc = value & 0xFF; checkLycEqualsLy(); }
+    public void setLyc(int value) { 
+        this.lyc = value & 0xFF; 
+        // A verificação LYC=LY agora é feita automaticamente em updateStatInterrupts()
+    }
 
     public int getBgp() { return bgp; }
     public void setBgp(int value) { this.bgp = value & 0xFF; }
