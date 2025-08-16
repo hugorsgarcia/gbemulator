@@ -44,15 +44,24 @@ public class GameBoy {
     }
 
     public int step() {
-        int cycles = cpu.step();
-        if (cycles == -1) return -1;
+        int cycles;
+
+        // Verifica se uma transferência DMA está em andamento.
+        if (mmu.isDmaActive()) {
+            // A CPU está paralisada. Nenhum passo da CPU é executado.
+            // Apenas avançamos o tempo para os outros componentes.
+            // Usamos 4 ciclos (equivalente a um NOP) como unidade de tempo.
+            cycles = 4;
+            mmu.updateDma(cycles); // Decrementa o contador de ciclos do DMA.
+        } else {
+            cycles = cpu.step();
+            if (cycles == -1) return -1;
+        }
 
         ppu.update(cycles);
         mmu.updateTimers(cycles); // <-- Você já tem isso, ótimo!
 
-        // --- ADICIONE ESTA LINHA ---
         cartridge.update(cycles); // Para atualizar lógicas internas do cartucho, como o RTC
-        // ---------------------------
 
         if (this.emulatorSoundGloballyEnabled && apu != null) {
             apu.update(cycles);

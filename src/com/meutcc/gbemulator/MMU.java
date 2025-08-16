@@ -46,6 +46,9 @@ public class MMU {
     private int timerCounter = 0;
     private static final int[] TIMER_FREQUENCIES = {1024, 16, 64, 256}; // Frequências em relação ao clock da CPU (4194304 Hz / Freq)
 
+    // --- DMA State ---
+    private int dmaCyclesRemaining = 0;
+
     // --- Serial State ---
     private int serialTransferCounter = 0;
     private boolean serialTransferInProgress = false;
@@ -123,6 +126,16 @@ public class MMU {
                 memory[REG_SC] &= ~0x80; // Reset transfer start flag
                 memory[REG_IF] |= 0x08; // Request Serial Interrupt
             }
+        }
+    }
+
+    public boolean isDmaActive() {
+        return this.dmaCyclesRemaining > 0;
+    }
+
+    public void updateDma(int cycles) {
+        if (this.dmaCyclesRemaining > 0) {
+            this.dmaCyclesRemaining -= cycles;
         }
     }
 
@@ -311,9 +324,13 @@ public class MMU {
     private void doDMATransfer(int sourceHighByte) {
         int sourceAddress = sourceHighByte << 8;
         for (int i = 0; i < 0xA0; i++) {
-            ppu.writeOAM(i, (byte) readByte(sourceAddress + i));
+            // A escrita na OAM é bloqueada durante o DMA, então a cópia deve ser direta.
+            // A leitura da fonte não deve ter efeitos colaterais de I/O.
+            // Uma leitura "raw" da memória seria mais segura, mas readByte funciona na maioria dos casos.
+            ppu.writeOAM(i, (byte) readByte(sourceAddress + i)); // A PPU deve permitir esta escrita específica.
         }
-        // TODO: A CPU deve ser paralisada por 160 microsegundos (~672 ciclos)
+        // A CPU é paralisada por 160 M-cycles = 640 T-cycles.
+        this.dmaCyclesRemaining = 640;
     }
 
     public void buttonPressed(Button button) {
