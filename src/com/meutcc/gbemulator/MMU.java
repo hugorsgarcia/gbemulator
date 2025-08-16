@@ -48,6 +48,7 @@ public class MMU {
 
     // --- DMA State ---
     private int dmaCyclesRemaining = 0;
+    private boolean dmaMemoryBlocked = false; // Bloqueio de memória durante OAM DMA
 
     // --- Serial State ---
     private int serialTransferCounter = 0;
@@ -68,6 +69,10 @@ public class MMU {
     public void reset() {
         for (int i = 0xC000; i < 0xE000; i++) memory[i] = 0;
         for (int i = 0xFF80; i < 0xFFFF; i++) memory[i] = 0;
+        
+        // Reset do estado do DMA
+        dmaCyclesRemaining = 0;
+        dmaMemoryBlocked = false;
 
         writeByte(REG_JOYP, (byte) 0xCF);
         writeByte(REG_SB, (byte) 0x00);
@@ -132,10 +137,41 @@ public class MMU {
     public boolean isDmaActive() {
         return this.dmaCyclesRemaining > 0;
     }
+    
+    /**
+     * Verifica se o acesso à memória está bloqueado devido ao OAM DMA
+     * @return true se a memória está bloqueada, false caso contrário
+     */
+    public boolean isDmaMemoryBlocked() {
+        return this.dmaMemoryBlocked;
+    }
+    
+    /**
+     * Obtém o número de ciclos restantes do DMA
+     * @return ciclos restantes do DMA
+     */
+    public int getDmaCyclesRemaining() {
+        return this.dmaCyclesRemaining;
+    }
+    
+    /**
+     * Verifica se um endereço específico é acessível durante OAM DMA
+     * Durante OAM DMA, apenas HRAM (0xFF80-0xFFFE) é acessível
+     * @param address endereço a verificar
+     * @return true se o endereço é acessível durante DMA
+     */
+    private boolean isAddressAccessibleDuringDMA(int address) {
+        // HRAM (High RAM) é sempre acessível, mesmo durante DMA
+        return (address >= 0xFF80 && address <= 0xFFFE);
+    }
 
     public void updateDma(int cycles) {
         if (this.dmaCyclesRemaining > 0) {
             this.dmaCyclesRemaining -= cycles;
+            if (this.dmaCyclesRemaining <= 0) {
+                // DMA terminou, liberar acesso à memória
+                this.dmaMemoryBlocked = false;
+            }
         }
     }
 
@@ -151,6 +187,12 @@ public class MMU {
 
     public int readByte(int address) {
         address &= 0xFFFF;
+        
+        // Verificar se a memória está bloqueada devido ao OAM DMA
+        if (dmaMemoryBlocked && !isAddressAccessibleDuringDMA(address)) {
+            // Durante OAM DMA, retornar 0xFF para endereços inacessíveis
+            return 0xFF;
+        }
 
         if (bootRomEnabled && address <= 0x00FF) {
             return bootRom[address] & 0xFF;
@@ -184,6 +226,12 @@ public class MMU {
     public void writeByte(int address, int value) {
         address &= 0xFFFF;
         byte byteValue = (byte) (value & 0xFF);
+        
+        // Verificar se a memória está bloqueada devido ao OAM DMA
+        if (dmaMemoryBlocked && !isAddressAccessibleDuringDMA(address)) {
+            // Durante OAM DMA, ignorar escritas para endereços inacessíveis
+            return;
+        }
 
         if (address >= 0x0000 && address <= 0x7FFF) {
             cartridge.write(address, byteValue);
@@ -323,14 +371,58 @@ public class MMU {
 
     private void doDMATransfer(int sourceHighByte) {
         int sourceAddress = sourceHighByte << 8;
+        
+        // Ativar bloqueio de memória durante OAM DMA
+        this.dmaMemoryBlocked = true;
+        
+        // Transferir 160 bytes (0xA0) para a OAM
         for (int i = 0; i < 0xA0; i++) {
             // A escrita na OAM é bloqueada durante o DMA, então a cópia deve ser direta.
             // A leitura da fonte não deve ter efeitos colaterais de I/O.
             // Uma leitura "raw" da memória seria mais segura, mas readByte funciona na maioria dos casos.
-            ppu.writeOAM(i, (byte) readByte(sourceAddress + i)); // A PPU deve permitir esta escrita específica.
+            ppu.writeOAM(i, (byte) readByteForDMA(sourceAddress + i)); // Leitura especial para DMA
         }
-        // A CPU é paralisada por 160 M-cycles = 640 T-cycles.
-        this.dmaCyclesRemaining = 640;
+        
+        // A CPU é paralisada por 160 ciclos (não 640)
+        // 160 M-cycles para transferir 160 bytes (1 byte por M-cycle)
+        this.dmaCyclesRemaining = 160;
+    }
+    
+    /**
+     * Leitura de memória especial para DMA que ignora o bloqueio de memória
+     * @param address endereço a ser lido
+     * @return valor do byte no endereço
+     */
+    private int readByteForDMA(int address) {
+        address &= 0xFFFF;
+
+        if (bootRomEnabled && address <= 0x00FF) {
+            return bootRom[address] & 0xFF;
+        }
+
+        if (address >= 0x0000 && address <= 0x7FFF) {
+            return cartridge.read(address) & 0xFF;
+        } else if (address >= 0x8000 && address <= 0x9FFF) {
+            return ppu.readVRAM(address - 0x8000) & 0xFF;
+        } else if (address >= 0xA000 && address <= 0xBFFF) {
+            return cartridge.readRam(address - 0xA000) & 0xFF;
+        } else if (address >= 0xC000 && address <= 0xDFFF) {
+            return memory[address] & 0xFF;
+        } else if (address >= 0xE000 && address <= 0xFDFF) {
+            return memory[address - 0x2000] & 0xFF;
+        } else if (address >= 0xFE00 && address <= 0xFE9F) {
+            return ppu.readOAM(address - 0xFE00) & 0xFF;
+        } else if (address >= 0xFEA0 && address <= 0xFEFF) {
+            return 0xFF;
+        } else if (address >= 0xFF00 && address <= 0xFF7F) {
+            return readIORegister(address) & 0xFF;
+        } else if (address >= 0xFF80 && address <= 0xFFFE) {
+            return memory[address] & 0xFF;
+        } else if (address == REG_IE) {
+            return memory[address] & 0xFF;
+        }
+
+        return 0xFF;
     }
 
     public void buttonPressed(Button button) {
