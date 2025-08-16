@@ -91,6 +91,10 @@ public class PPU {
     private boolean statInterruptLine; // Estado da linha de interrupção STAT (para edge detection)
     private int mode3Duration; // Duração calculada do modo 3 para scanline atual
 
+    // Sistema FIFO para renderização pixel-accurate
+    private PPUPixelFIFO pixelFIFO;
+    private boolean fifoMode; // Se deve usar FIFO (true) ou scanline tradicional (false)
+
     private MMU mmu; // Referência à MMU para solicitar interrupções
 
     public PPU() {
@@ -124,6 +128,11 @@ public class PPU {
         scanlineCycles = 0;
         statInterruptLine = false;
         mode3Duration = MODE_3_BASE_CYCLES;
+        
+        // Inicializar sistema FIFO
+        pixelFIFO = new PPUPixelFIFO(this, mmu, vram, oam);
+        fifoMode = true; // Usar FIFO por padrão para máxima precisão
+        
         System.out.println("PPU reset.");
     }
 
@@ -177,7 +186,9 @@ public class PPU {
         scanlineCycles = 0;
         statInterruptLine = false;
         
-        mmu.writeByte(MMU.REG_LY, ly);
+        if (mmu != null) {
+            mmu.writeByte(MMU.REG_LY, ly);
+        }
         updateStatRegister();
     }
     
@@ -199,16 +210,34 @@ public class PPU {
      * Modo 3: Drawing (172-289 ciclos variável)
      */
     private void updateDrawingMode() {
-        if (cyclesCounter >= mode3Duration) {
-            cyclesCounter = 0;
-            ppuMode = 0;
-            
-            // Renderizar a scanline quando modo 3 termina
-            if (ly < SCREEN_HEIGHT) {
-                renderScanline();
+        if (fifoMode) {
+            // Usar sistema FIFO para renderização pixel-accurate
+            if (cyclesCounter == 1) {
+                // Iniciar FIFO no primeiro ciclo do modo 3
+                pixelFIFO.startScanline(ly);
             }
             
-            updateStatRegister();
+            // Processar um ciclo do FIFO
+            boolean scanlineComplete = pixelFIFO.processCycle();
+            
+            if (scanlineComplete || cyclesCounter >= mode3Duration) {
+                cyclesCounter = 0;
+                ppuMode = 0;
+                updateStatRegister();
+            }
+        } else {
+            // Usar renderização tradicional por scanline
+            if (cyclesCounter >= mode3Duration) {
+                cyclesCounter = 0;
+                ppuMode = 0;
+                
+                // Renderizar a scanline quando modo 3 termina
+                if (ly < SCREEN_HEIGHT) {
+                    renderScanline();
+                }
+                
+                updateStatRegister();
+            }
         }
     }
     
@@ -222,7 +251,9 @@ public class PPU {
             cyclesCounter = 0;
             ly++;
             
-            mmu.writeByte(MMU.REG_LY, ly);
+            if (mmu != null) {
+                mmu.writeByte(MMU.REG_LY, ly);
+            }
             
             if (ly == SCREEN_HEIGHT) {
                 // Entrar em V-Blank
@@ -249,13 +280,17 @@ public class PPU {
             cyclesCounter = 0;
             ly++;
             
-            mmu.writeByte(MMU.REG_LY, ly);
+            if (mmu != null) {
+                mmu.writeByte(MMU.REG_LY, ly);
+            }
             
             if (ly >= TOTAL_LINES) {
                 // Fim do V-Blank, reiniciar frame
                 ly = 0;
                 ppuMode = 2;
-                mmu.writeByte(MMU.REG_LY, ly);
+                if (mmu != null) {
+                    mmu.writeByte(MMU.REG_LY, ly);
+                }
             }
             
             updateStatRegister();
@@ -350,13 +385,17 @@ public class PPU {
      * Solicita interrupção V-Blank
      */
     private void requestVBlankInterrupt() {
-        byte currentIF = (byte) mmu.readByte(MMU.REG_IF);
-        mmu.writeByte(MMU.REG_IF, (byte) (currentIF | 0x01)); // Bit 0: V-Blank
+        if (mmu != null) {
+            byte currentIF = (byte) mmu.readByte(MMU.REG_IF);
+            mmu.writeByte(MMU.REG_IF, (byte) (currentIF | 0x01)); // Bit 0: V-Blank
+        }
     }
 
     private void requestLcdStatInterrupt() {
-        byte currentIF = (byte) mmu.readByte(MMU.REG_IF);
-        mmu.writeByte(MMU.REG_IF, (byte) (currentIF | 0x02)); // Seta bit 1 (LCD STAT)
+        if (mmu != null) {
+            byte currentIF = (byte) mmu.readByte(MMU.REG_IF);
+            mmu.writeByte(MMU.REG_IF, (byte) (currentIF | 0x02)); // Seta bit 1 (LCD STAT)
+        }
     }
 
     private void updateStatRegister() {
@@ -364,7 +403,9 @@ public class PPU {
         // Bit de coincidência (bit 2, 0x04) é atualizado em checkLycEqualsLy.
         // Os bits 3-6 (interrupt select) e bit 7 (não usado) são preservados.
         stat = (stat & 0xF8) | (ppuMode & 0x03) | (stat & 0x04);
-        mmu.writeByte(MMU.REG_STAT, stat);
+        if (mmu != null) {
+            mmu.writeByte(MMU.REG_STAT, stat);
+        }
     }
 
 
@@ -929,7 +970,9 @@ public class PPU {
         this.lcdc = value & 0xFF;
         if (!isLcdEnabled()) { // Se LCD foi desligado
             ly = 0;
-            mmu.writeByte(MMU.REG_LY, ly); // LY reseta para 0
+            if (mmu != null) {
+                mmu.writeByte(MMU.REG_LY, ly); // LY reseta para 0
+            }
             ppuMode = 1; // Entra em VBlank Mode (ou HBlank, depende da fonte)
             cyclesCounter = 0;
             updateStatRegister();
@@ -1026,5 +1069,53 @@ public class PPU {
             return true;
         }
         return false;
+    }
+    
+    /**
+     * Define um pixel no buffer de tela (usado pelo sistema FIFO)
+     */
+    public void setPixel(int x, int y, int color) {
+        if (x >= 0 && x < SCREEN_WIDTH && y >= 0 && y < SCREEN_HEIGHT) {
+            int index = y * SCREEN_WIDTH + x;
+            if (index < screenBuffer.length) {
+                screenBuffer[index] = color;
+            }
+        }
+    }
+    
+    /**
+     * Controle do modo de renderização FIFO
+     */
+    public void setFIFOMode(boolean enabled) {
+        this.fifoMode = enabled;
+        if (enabled && pixelFIFO == null) {
+            pixelFIFO = new PPUPixelFIFO(this, mmu, vram, oam);
+        }
+    }
+    
+    public boolean isFIFOMode() {
+        return fifoMode;
+    }
+    
+    /**
+     * Informações de debug do FIFO
+     */
+    public String getFIFOStatus() {
+        if (pixelFIFO == null) {
+            return "FIFO: Desabilitado";
+        }
+        
+        return String.format("FIFO: %s | Pixels: %d | BG FIFO: %d | Sprite FIFO: %d", 
+            pixelFIFO.isRenderingActive() ? "Ativo" : "Inativo",
+            pixelFIFO.getPixelsRendered(),
+            pixelFIFO.getBgFIFOSize(),
+            pixelFIFO.getSpriteFIFOSize());
+    }
+    
+    /**
+     * Getter para o modo atual da PPU (para debug)
+     */
+    public int getPpuMode() {
+        return ppuMode;
     }
 }
