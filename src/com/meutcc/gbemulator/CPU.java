@@ -31,6 +31,9 @@ public class CPU {
     
     // Contador para debug de opcodes não documentados (opcional)
     private boolean debugUndocumentedOpcodes = false;
+    
+    // Estado do HALT bug - quando IME=0 mas há interrupção pendente
+    private boolean haltBugTriggered = false;
 
     public CPU(MMU mmu) {
         this.mmu = mmu;
@@ -50,6 +53,7 @@ public class CPU {
         ime = false;
         halted = false;
         divAccumulator = 0;
+        haltBugTriggered = false;
         System.out.println("CPU reset. PC=" + String.format("0x%04X", pc));
     }
 
@@ -68,6 +72,35 @@ public class CPU {
     public void setDebugUndocumentedOpcodes(boolean enable) {
         this.debugUndocumentedOpcodes = enable;
     }
+    
+    /**
+     * Implementa a lógica do HALT com o famoso "HALT bug".
+     * 
+     * Comportamento normal: IME=1 ou nenhuma interrupção pendente
+     * - CPU entra em estado HALT normal
+     * 
+     * HALT Bug: IME=0 mas há interrupção pendente (IF & IE != 0)
+     * - CPU não entra em HALT
+     * - Próxima instrução é executada mas PC não é incrementado
+     * - Resultado: próxima instrução é executada duas vezes
+     */
+    private void executeHalt() {
+        byte IE = (byte) mmu.readByte(0xFFFF);
+        byte IF = (byte) mmu.readByte(0xFF0F);
+        boolean interruptPending = (IE & IF & 0x1F) != 0;
+        
+        if (!ime && interruptPending) {
+            // HALT bug: IME=0 mas há interrupção pendente
+            // A CPU não entra em HALT, mas a próxima instrução será executada duas vezes
+            haltBugTriggered = true;
+            halted = false;
+            System.out.println("HALT bug triggered! Next instruction will be executed twice.");
+        } else {
+            // Comportamento normal do HALT
+            halted = true;
+            haltBugTriggered = false;
+        }
+    }
 
     public int step() {
         cycles = 0;
@@ -79,6 +112,14 @@ public class CPU {
             executedCyclesThisStep = 4; // HALT consome ciclos como um NOP
         } else {
             int opcode = fetch();
+            
+            // Verificar se o HALT bug foi ativado na execução anterior
+            if (haltBugTriggered) {
+                // HALT bug: restaurar PC para executar a mesma instrução novamente
+                pc = (pc - 1) & 0xFFFF;
+                haltBugTriggered = false; // Reset do estado do bug após a primeira execução
+            }
+            
             decodeAndExecute(opcode); // Este método define this.cycles
             executedCyclesThisStep = this.cycles; // Captura os ciclos da instrução executada
         }
@@ -315,7 +356,11 @@ public class CPU {
             case 0x73: mmu.writeByte(getHL(), e); cycles = 8; break;
             case 0x74: mmu.writeByte(getHL(), h); cycles = 8; break;
             case 0x75: mmu.writeByte(getHL(), l); cycles = 8; break;
-            case 0x76: halted = true; cycles = 4; break;
+            // HALT - Implementação do HALT bug
+            case 0x76: 
+                executeHalt();
+                cycles = 4; 
+                break;
             case 0x77: mmu.writeByte(getHL(), a); cycles = 8; break;
 
             case 0x78: a = b; cycles = 4; break;
@@ -1143,6 +1188,7 @@ public class CPU {
         }
 
         // HALT é encerrado se qualquer interrupção (mesmo desabilitada no IE) estiver pendente no IF
+        // Nota: O HALT bug já foi tratado na execução da instrução HALT
         halted = false;
 
         if (!ime) {
@@ -1185,6 +1231,22 @@ public class CPU {
      */
     public int getPC() {
         return pc;
+    }
+    
+    /**
+     * Define o estado do Interrupt Master Enable (IME) para testes.
+     * @param enable true para habilitar interrupções, false para desabilitar
+     */
+    public void setIME(boolean enable) {
+        this.ime = enable;
+    }
+    
+    /**
+     * Obtém o estado atual do Interrupt Master Enable (IME).
+     * @return true se interrupções estão habilitadas, false caso contrário
+     */
+    public boolean getIME() {
+        return ime;
     }
 
     public String getStatus() {
