@@ -43,8 +43,14 @@ public class MMU {
     private byte joypadState = (byte) 0xFF;
 
     // --- Timer State ---
-    private int timerCounter = 0;
-    private static final int[] TIMER_FREQUENCIES = {1024, 16, 64, 256}; // Frequências em relação ao clock da CPU (4194304 Hz / Freq)
+    private int divCounter = 0;  // Contador interno de 16-bit para DIV
+    
+    // Bits do DIV selecionados por TAC para TIMA
+    // TAC[1:0] = 00: bit 9 (4096 Hz)
+    // TAC[1:0] = 01: bit 3 (262144 Hz) 
+    // TAC[1:0] = 10: bit 5 (65536 Hz)
+    // TAC[1:0] = 11: bit 7 (16384 Hz)
+    private static final int[] TIMER_BIT_POSITIONS = {9, 3, 5, 7};
 
     // --- DMA State ---
     private int dmaCyclesRemaining = 0;
@@ -95,7 +101,8 @@ public class MMU {
         writeByte(REG_BOOT_ROM_DISABLE, (byte) 0x00);
 
         joypadState = (byte) 0xFF;
-        timerCounter = 0;
+        // --- Reset Timer State ---
+        divCounter = 0;
         serialTransferCounter = 0;
         serialTransferInProgress = false;
         bootRomEnabled = false; // Assumindo que não estamos carregando uma boot rom real por padrão
@@ -104,23 +111,9 @@ public class MMU {
     }
 
     public void updateTimers(int cycles) {
-        // --- Timer Logic ---
-        int tac = memory[REG_TAC] & 0xFF;
-        if ((tac & 0x04) != 0) { // Timer is enabled
-            timerCounter += cycles;
-            int threshold = TIMER_FREQUENCIES[tac & 0x03];
-
-            while (timerCounter >= threshold) {
-                timerCounter -= threshold;
-                int tima = memory[REG_TIMA] & 0xFF;
-                if (tima == 0xFF) {
-                    memory[REG_TIMA] = memory[REG_TMA]; // Reset TIMA to TMA
-                    // Request Timer Interrupt
-                    memory[REG_IF] |= 0x04;
-                } else {
-                    memory[REG_TIMA]++;
-                }
-            }
+        // Atualizar DIV contador interno (16-bit) a cada ciclo
+        for (int i = 0; i < cycles; i++) {
+            updateTimersSingleCycle();
         }
 
         // --- Serial Logic ---
@@ -131,6 +124,51 @@ public class MMU {
                 memory[REG_SC] &= ~0x80; // Reset transfer start flag
                 memory[REG_IF] |= 0x08; // Request Serial Interrupt
             }
+        }
+    }
+    
+    /**
+     * Atualiza os timers de forma precisa, ciclo por ciclo
+     */
+    private void updateTimersSingleCycle() {
+        // Salvar o estado atual do bit selecionado ANTES de incrementar
+        int tac = memory[REG_TAC] & 0xFF;
+        int oldTimerBit = 0;
+        
+        if ((tac & 0x04) != 0) { // Timer habilitado
+            int bitPosition = TIMER_BIT_POSITIONS[tac & 0x03];
+            oldTimerBit = (divCounter >> bitPosition) & 1;
+        }
+        
+        // Incrementar o contador interno DIV de 16-bit
+        divCounter = (divCounter + 1) & 0xFFFF;
+        
+        // Atualizar o registrador DIV visível (bits 8-15 do contador interno)
+        memory[REG_DIV] = (byte) ((divCounter >> 8) & 0xFF);
+        
+        // Verificar se TIMA deve incrementar baseado na transição
+        if ((tac & 0x04) != 0) { // Timer habilitado
+            int bitPosition = TIMER_BIT_POSITIONS[tac & 0x03];
+            int newTimerBit = (divCounter >> bitPosition) & 1;
+            
+            // Detectar borda de subida (0 → 1)
+            if (oldTimerBit == 0 && newTimerBit == 1) {
+                incrementTIMA();
+            }
+        }
+    }
+    
+    /**
+     * Incrementa TIMA e trata overflow
+     */
+    private void incrementTIMA() {
+        int tima = memory[REG_TIMA] & 0xFF;
+        if (tima == 0xFF) {
+            memory[REG_TIMA] = memory[REG_TMA]; // Reset TIMA to TMA
+            // Request Timer Interrupt
+            memory[REG_IF] |= 0x04;
+        } else {
+            memory[REG_TIMA] = (byte) ((tima + 1) & 0xFF);
         }
     }
 
@@ -175,8 +213,14 @@ public class MMU {
         }
     }
 
+    /**
+     * @deprecated Este método não é mais usado. O DIV é agora atualizado automaticamente 
+     * pelo updateTimers() com timing preciso de ciclo.
+     */
+    @Deprecated
     public void incrementDivRegister() {
-        memory[REG_DIV]++;
+        // Método mantido para compatibilidade, mas não faz nada
+        // O DIV é agora atualizado automaticamente em updateTimersSingleCycle()
     }
 
     public void loadCartridge(Cartridge cart) {
@@ -304,7 +348,25 @@ public class MMU {
     private void writeIORegister(int address, byte value) {
         switch (address) {
             case REG_DIV:
+                // Verificar se o reset do DIV pode disparar TIMA (glitch de hardware)
+                int tac = memory[REG_TAC] & 0xFF;
+                if ((tac & 0x04) != 0) { // Timer habilitado
+                    int bitPosition = TIMER_BIT_POSITIONS[tac & 0x03];
+                    int currentTimerBit = (divCounter >> bitPosition) & 1;
+                    
+                    // Se o bit estava em 1, o reset para 0 seguido de uma 
+                    // eventual transição 0→1 pode disparar TIMA
+                    // Isso simula o comportamento do hardware onde o reset
+                    // pode criar uma borda de subida artificial
+                    if (currentTimerBit == 1) {
+                        incrementTIMA();
+                    }
+                }
+                
+                // Resetar DIV para 0
+                divCounter = 0;
                 memory[REG_DIV] = 0;
+                
                 if (cpu != null) {
                     cpu.resetDivAccumulator();
                 }

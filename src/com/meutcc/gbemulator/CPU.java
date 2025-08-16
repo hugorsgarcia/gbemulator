@@ -27,7 +27,6 @@ public class CPU {
     private boolean ime; // Interrupt Master Enable
     private boolean halted;
     private int cycles = 0; // Ciclos da instrução atual
-    private int divAccumulator = 0;
     
     // Contador para debug de opcodes não documentados (opcional)
     private boolean debugUndocumentedOpcodes = false;
@@ -48,21 +47,21 @@ public class CPU {
         d = 0x00; e = 0xD8;
         h = 0x01; l = 0x4D;
         sp = 0xFFFE;
-        pc = 0x0100; // Ponto de ent
+        pc = 0x0100; // Ponto de entrada
         cycles = 0;
         ime = false;
         halted = false;
-        divAccumulator = 0;
         haltBugTriggered = false;
         System.out.println("CPU reset. PC=" + String.format("0x%04X", pc));
     }
 
     /**
-     * Reseta o acumulador de ciclos usado para incrementar o registrador DIV.
-     * Chamado pela MMU quando o registrador DIV (0xFF04) é escrito.
+     * @deprecated Este método não é mais necessário. O DIV é agora gerenciado 
+     * completamente pela MMU com timing preciso.
      */
+    @Deprecated
     public void resetDivAccumulator() {
-        this.divAccumulator = 0;
+        // Método mantido para compatibilidade, mas não faz nada
     }
     
     /**
@@ -124,12 +123,9 @@ public class CPU {
             executedCyclesThisStep = this.cycles; // Captura os ciclos da instrução executada
         }
 
-        // --- LÓGICA DE INCREMENTO DO DIV ---
-        divAccumulator += executedCyclesThisStep; // Acumula T-cycles
-        if (divAccumulator >= 256) {
-            divAccumulator -= 256; // Subtrai o período do DIV
-            mmu.incrementDivRegister(); // Chama o novo método na MMU
-        }
+        // --- NOTA: LÓGICA DO DIV MOVIDA PARA MMU ---
+        // O DIV agora é atualizado automaticamente pela MMU.updateTimers()
+        // com timing preciso de ciclo. A lógica anterior foi removida.
         // -----------------------------------
 
         return executedCyclesThisStep;
