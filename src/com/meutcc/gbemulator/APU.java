@@ -45,12 +45,18 @@ public class APU {
     private final WaveChannel channel3;
     private final NoiseChannel channel4;
 
-    // --- Control Registers (internal state) ---
-    // NR50 (FF24): Channel control / ON-OFF / Volume
-    private int nr50_vin_panning_master_vol = 0x77; // SO2 vol (bits 4-6), SO1 vol (bits 0-2)
-    // NR51 (FF25): Selection of Sound output terminal
-    private int nr51_output_panning = 0xFF; // Each bit pair for Ch4-Ch1 to SO2/SO1
-    // NR52 (FF26) is handled by masterSoundEnable and channel.isActive()
+    // --- Control Registers (internal state) - IMPLEMENTAÇÃO CORRIGIDA ---
+    // NR50 (FF24): Master volume & VIN panning
+    private int nr50_vin_panning_master_vol = 0x77; 
+    // NR51 (FF25): Sound panning - cada canal para saída esquerda/direita
+    private int nr51_output_panning = 0xFF; 
+    // NR52 (FF26): Audio master control - controlado por masterSoundEnable e isChannelActive()
+    
+    // Estados dos canais para NR52
+    private boolean channel1Active = false;
+    private boolean channel2Active = false; 
+    private boolean channel3Active = false;
+    private boolean channel4Active = false;
 
     // Raw register values (FF10 - FF26 for channels, FF30 - FF3F for wave RAM)
     // These are written by MMU and read by channel logic
@@ -241,51 +247,41 @@ public class APU {
             int ch3Out = channel3.getOutputSample();
             int ch4Out = channel4.getOutputSample();
 
-            // Simple mono mix: sum channel outputs.
-            // Game Boy has two output terminals (SO1, SO2). NR51 pans channels. NR50 is master volume.
-            // For mono, we can sum contributions. Max output of one channel is 15. Max sum could be 60.
-            // This needs to be scaled to 16-bit range (e.g., -32768 to 32767).
-            // A simple approach: sum and scale.
-            // Each channel's output is 0-15. Let's assume they are already volume-adjusted by their envelopes.
-            // The DAC converts this to an analog level.
-            // A common mixing formula: (ch1+ch2+ch3+ch4)/4 * master_volume_scalar
-            // Or, more directly, scale the 0-15 range.
-            // Max digital sum: 15*4 = 60.
-            // Let's scale this to, say, 1/4 of the 16-bit range to avoid clipping easily.
-            // Max 16-bit positive is 32767. So, 32767 / 60 = ~546.
-            // Each unit from a channel (0-15) could contribute `value * 500` to the final mix, for example.
-            // This is a placeholder for proper mixing and volume scaling.
-
-            float mixedSample = 0;
-
-            // SO1 and SO2 master volumes (0-7)
-            int so1_vol = (nr50_vin_panning_master_vol & 0x07);
-            int so2_vol = ((nr50_vin_panning_master_vol >> 4) & 0x07);
-
-            // For mono, we can average or sum SO1 and SO2 contributions.
-            // Let's just sum all channels selected for output and apply an overall volume.
-            // This simplification ignores SO1/SO2 distinction for mono.
-            float totalOut = 0;
-            if ((nr51_output_panning & 0x01) != 0 || (nr51_output_panning & 0x10) != 0) totalOut += ch1Out; // Ch1 to SO1 or SO2
-            if ((nr51_output_panning & 0x02) != 0 || (nr51_output_panning & 0x20) != 0) totalOut += ch2Out; // Ch2 to SO1 or SO2
-            if ((nr51_output_panning & 0x04) != 0 || (nr51_output_panning & 0x40) != 0) totalOut += ch3Out; // Ch3 to SO1 or SO2
-            if ((nr51_output_panning & 0x08) != 0 || (nr51_output_panning & 0x80) != 0) totalOut += ch4Out; // Ch4 to SO1 or SO2
-
-            // Scale totalOut (max ~60 if all channels max and panned) to 16-bit range.
-            // Let's use a master volume scalar. (so1_vol + so2_vol) / 14.0f as a rough master.
-            // Max output of a channel is 15. Max sum is 60.
-            // Scale 0-15 to roughly 0 - 8000 for each channel.
-            // mixedSample = (ch1Out + ch2Out + ch3Out + ch4Out) * 100.0f; // Very rough scaling
-            // A channel's output (0-15) should be mapped to an amplitude.
-            // E.g., (sample_0_15 / 7.5f - 1.0f) to get -1 to +1 range, then scale by volume.
-            // For now, let's assume each channel's getOutputSample() returns a value already somewhat scaled.
-            // And the sum is then globally scaled.
-            // Max output from a channel is 15. Let's scale this to be a fraction of 32767.
-            // If one channel is max (15), maybe it's 15 * 500 = 7500.
-            // If all four are max, 4 * 7500 = 30000. This seems reasonable.
-            mixedSample = (ch1Out + ch2Out + ch3Out + ch4Out) * 200.0f; // Adjust this factor
-
-            // Clamp to 16-bit range
+            // MIXAGEM CORRIGIDA baseada no Pandocs
+            // Game Boy tem dois terminais de saída (SO1, SO2)
+            // NR51 controla panning: qual canal vai para qual saída
+            // NR50 controla volume master de cada saída
+            
+            float leftOut = 0;  // SO1 (left)
+            float rightOut = 0; // SO2 (right)
+            
+            // Volume master para cada saída (0-7)
+            int leftVol = (nr50_vin_panning_master_vol & 0x07) + 1;      // SO1 volume
+            int rightVol = ((nr50_vin_panning_master_vol >> 4) & 0x07) + 1; // SO2 volume
+            
+            // Aplicar panning baseado no NR51
+            if ((nr51_output_panning & 0x01) != 0) leftOut += ch1Out;   // Ch1 to SO1
+            if ((nr51_output_panning & 0x02) != 0) leftOut += ch2Out;   // Ch2 to SO1  
+            if ((nr51_output_panning & 0x04) != 0) leftOut += ch3Out;   // Ch3 to SO1
+            if ((nr51_output_panning & 0x08) != 0) leftOut += ch4Out;   // Ch4 to SO1
+            
+            if ((nr51_output_panning & 0x10) != 0) rightOut += ch1Out;  // Ch1 to SO2
+            if ((nr51_output_panning & 0x20) != 0) rightOut += ch2Out;  // Ch2 to SO2
+            if ((nr51_output_panning & 0x40) != 0) rightOut += ch3Out;  // Ch3 to SO2
+            if ((nr51_output_panning & 0x80) != 0) rightOut += ch4Out;  // Ch4 to SO2
+            
+            // Aplicar volume master
+            leftOut *= leftVol / 8.0f;
+            rightOut *= rightVol / 8.0f;
+            
+            // Para mono, fazer média das saídas esquerda e direita
+            float mixedSample = (leftOut + rightOut) / 2.0f;
+            
+            // Escalar para range 16-bit - cada canal produz 0-15, máximo seria 60
+            // Escalando conservadoramente para evitar clipping
+            mixedSample *= 400.0f;
+            
+            // Clamp para range 16-bit
             if (mixedSample > 32767.0f) mixedSample = 32767.0f;
             if (mixedSample < -32768.0f) mixedSample = -32768.0f;
 
