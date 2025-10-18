@@ -19,6 +19,7 @@ public class GameBoyWindow extends JFrame {
     private final GameBoy gameBoy;
     private Thread emulationThread;
     private volatile boolean running = false;
+    private volatile boolean paused = false;
     private final InputHandler inputHandler;
 
     // Flag para controlar o estado global do som do emulador
@@ -44,6 +45,16 @@ public class GameBoyWindow extends JFrame {
         JMenuItem loadRomItem = new JMenuItem("Load ROM...");
         loadRomItem.addActionListener(e -> openRomChooser());
         fileMenu.add(loadRomItem);
+        
+        fileMenu.addSeparator();
+        
+        JMenuItem saveStateItem = new JMenuItem("Save State...");
+        saveStateItem.addActionListener(e -> saveState());
+        fileMenu.add(saveStateItem);
+        
+        JMenuItem loadStateItem = new JMenuItem("Load State...");
+        loadStateItem.addActionListener(e -> loadState());
+        fileMenu.add(loadStateItem);
         
         // Adicionar opção de tamanho de janela
         JMenu windowMenu = new JMenu("Janela");
@@ -74,10 +85,59 @@ public class GameBoyWindow extends JFrame {
         soundMenu.add(toggleSoundItem);
         menuBar.add(soundMenu);
         setJMenuBar(menuBar);
+        
+        // Adicionar listeners para pausar quando menu for aberto
+        addMenuPauseListeners(fileMenu);
+        addMenuPauseListeners(windowMenu);
+        addMenuPauseListeners(controlMenu);
+        addMenuPauseListeners(soundMenu);
+        
         addKeyListener(inputHandler);
         setFocusable(true);
         pack();
         setLocationRelativeTo(null); // Centralizar
+    }
+    
+    /**
+     * Adiciona listeners a um menu para pausar a emulação quando aberto
+     */
+    private void addMenuPauseListeners(JMenu menu) {
+        menu.addMenuListener(new javax.swing.event.MenuListener() {
+            @Override
+            public void menuSelected(javax.swing.event.MenuEvent e) {
+                pauseEmulation();
+            }
+
+            @Override
+            public void menuDeselected(javax.swing.event.MenuEvent e) {
+                resumeEmulation();
+            }
+
+            @Override
+            public void menuCanceled(javax.swing.event.MenuEvent e) {
+                resumeEmulation();
+            }
+        });
+    }
+    
+    /**
+     * Pausa a emulação temporariamente
+     */
+    private void pauseEmulation() {
+        if (running && !paused) {
+            paused = true;
+            System.out.println("Emulação pausada (menu aberto)");
+        }
+    }
+    
+    /**
+     * Resume a emulação
+     */
+    private void resumeEmulation() {
+        if (running && paused) {
+            paused = false;
+            System.out.println("Emulação resumida");
+        }
     }
 
 
@@ -120,6 +180,69 @@ public class GameBoyWindow extends JFrame {
         screenPanel.setPreferredSize(new Dimension(SCREEN_WIDTH * scale, SCREEN_HEIGHT * scale));
         pack();
         setLocationRelativeTo(null); // Recentra a janela
+    }
+
+    private void saveState() {
+        JFileChooser fileChooser = new JFileChooser(".");
+        fileChooser.setDialogTitle("Save State");
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileFilter() {
+            @Override
+            public boolean accept(File f) {
+                return f.isDirectory() || f.getName().toLowerCase().endsWith(".sav");
+            }
+            @Override
+            public String getDescription() {
+                return "Save State Files (*.sav)";
+            }
+        });
+
+        int result = fileChooser.showSaveDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = fileChooser.getSelectedFile();
+            String filePath = selectedFile.getAbsolutePath();
+            if (!filePath.toLowerCase().endsWith(".sav")) {
+                filePath += ".sav";
+            }
+            
+            try {
+                gameBoy.saveState(filePath);
+                JOptionPane.showMessageDialog(this, "State saved successfully!", 
+                    "Save State", JOptionPane.INFORMATION_MESSAGE);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Failed to save state: " + ex.getMessage(),
+                    "Error", JOptionPane.ERROR_MESSAGE);
+                ex.printStackTrace();
+            }
+        }
+    }
+
+    private void loadState() {
+        JFileChooser fileChooser = new JFileChooser(".");
+        fileChooser.setDialogTitle("Load State");
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileFilter() {
+            @Override
+            public boolean accept(File f) {
+                return f.isDirectory() || f.getName().toLowerCase().endsWith(".sav");
+            }
+            @Override
+            public String getDescription() {
+                return "Save State Files (*.sav)";
+            }
+        });
+
+        int result = fileChooser.showOpenDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = fileChooser.getSelectedFile();
+            try {
+                gameBoy.loadState(selectedFile.getAbsolutePath());
+                JOptionPane.showMessageDialog(this, "State loaded successfully!", 
+                    "Load State", JOptionPane.INFORMATION_MESSAGE);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Failed to load state: " + ex.getMessage(),
+                    "Error", JOptionPane.ERROR_MESSAGE);
+                ex.printStackTrace();
+            }
+        }
     }
 
 
@@ -194,7 +317,7 @@ public class GameBoyWindow extends JFrame {
             accumulatedTime += frameTime;
 
             // Processa frames acumulados (geralmente apenas 1)
-            while (accumulatedTime >= NANOSECONDS_PER_FRAME) {
+            while (accumulatedTime >= NANOSECONDS_PER_FRAME && !paused) {
                 // Executa um frame completo do Game Boy
                 int cyclesThisFrame = 0;
                 while (cyclesThisFrame < CYCLES_PER_FRAME) {
@@ -211,6 +334,12 @@ public class GameBoyWindow extends JFrame {
                 
                 accumulatedTime -= NANOSECONDS_PER_FRAME;
                 frameCount++;
+            }
+
+            // Se está pausado, reseta o acumulador para não processar frames acumulados
+            if (paused) {
+                accumulatedTime = 0;
+                lastTime = System.nanoTime();
             }
 
             if (!running) break;

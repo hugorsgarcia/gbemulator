@@ -28,7 +28,7 @@ public class CPU {
     private boolean halted;
     private int cycles = 0; // Ciclos da instrução atual
     
-    // Contador para debug de opcodes não documentados (opcional)
+    // Contador para debug de opcodes não documentados
     private boolean debugUndocumentedOpcodes = false;
     
     // Estado do HALT bug - quando IME=0 mas há interrupção pendente
@@ -65,15 +65,15 @@ public class CPU {
     }
     
     /**
-     * Habilita debug de opcodes não documentados para desenvolvimento e testing.
-     * @param enable true para habilitar debug, false para desabilitar
+     * Habilita debug de opcodes não documentados para desenvolvimento e teste.
+     * @param enable
      */
     public void setDebugUndocumentedOpcodes(boolean enable) {
         this.debugUndocumentedOpcodes = enable;
     }
     
     /**
-     * Implementa a lógica do HALT com o famoso "HALT bug".
+     * Implementa a lógica do HALT ou "HALT bug".
      * 
      * Comportamento normal: IME=1 ou nenhuma interrupção pendente
      * - CPU entra em estado HALT normal
@@ -122,11 +122,6 @@ public class CPU {
             decodeAndExecute(opcode); // Este método define this.cycles
             executedCyclesThisStep = this.cycles; // Captura os ciclos da instrução executada
         }
-
-        // --- NOTA: LÓGICA DO DIV MOVIDA PARA MMU ---
-        // O DIV agora é atualizado automaticamente pela MMU.updateTimers()
-        // com timing preciso de ciclo. A lógica anterior foi removida.
-        // -----------------------------------
 
         return executedCyclesThisStep;
     }
@@ -480,16 +475,12 @@ public class CPU {
             case 0xD1: setDE(popWord()); cycles = 12; break;
             // JP NC,a16
             case 0xD2: if (!getCarryFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
-            // Opcode 0xD3 (undocumented - OUT (n),A - effectively NOP in Game Boy)
-            // Timing: 8 cycles total (4 for opcode fetch + 4 for immediate byte fetch)
-            // Behavior: Consumes immediate byte but performs no operation
-            // Flags: No flags affected
             case 0xD3:
                 if (debugUndocumentedOpcodes) {
                     System.out.println(String.format("Executed undocumented opcode 0xD3 at PC: 0x%04X", (pc-1)&0xFFFF));
                 }
                 fetch(); // Consome o byte imediato, mas não faz nada com ele
-                cycles = 8; // Timing preciso para este opcode não documentado
+                cycles = 8; 
                 break;
             // CALL NC,a16
             case 0xD4: if (!getCarryFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
@@ -506,25 +497,19 @@ public class CPU {
             case 0xD9: ret(); ime = true; cycles = 16; break;
             // JP C,a16
             case 0xDA: if (getCarryFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
-            // Opcode 0xDB (undocumented - IN A,(n) - effectively NOP in Game Boy)
-            // Timing: 8 cycles total (4 for opcode fetch + 4 for immediate byte fetch)
-            // Behavior: Consumes immediate byte but performs no operation
-            // Flags: No flags affected
+
             case 0xDB:
                 if (debugUndocumentedOpcodes) {
                     System.out.println(String.format("Executed undocumented opcode 0xDB at PC: 0x%04X", (pc-1)&0xFFFF));
                 }
                 fetch(); // Consome o byte imediato, mas não faz nada com ele
-                cycles = 8; // Timing preciso para este opcode não documentado
+                cycles = 8; 
                 break;
             // CALL C,a16
             case 0xDC: if (getCarryFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
-            // Opcode 0xDD (undocumented - Z80 IX prefix, effectively NOP in Game Boy)
-            // Timing: 8 cycles (IX register doesn't exist in LR35902)
-            // Behavior: No operation performed
-            // Flags: No flags affected
+
             case 0xDD:
-                cycles = 8; // Timing preciso para este opcode não documentado
+                cycles = 8;
                 break;
             // SBC A,d8
             case 0xDE: sbcA(fetch()); cycles = 8; break;
@@ -537,16 +522,15 @@ public class CPU {
             case 0xE1: setHL(popWord()); cycles = 12; break;
             // LD (C),A -> LD (0xFF00+C),A
             case 0xE2: mmu.writeByte(0xFF00 + (c & 0xFF), a); cycles = 8; break;
-            // Opcodes 0xE3, 0xE4 (undocumented - EX (SP),HL variants - effectively NOP in Game Boy)
-            // These opcodes are remnants from Z80 architecture
+           
             case 0xE3: 
-                // EX (SP),HL variant - 8 cycles, no operation in Game Boy
-                cycles = 8; // Timing preciso para este opcode não documentado
+                
+                cycles = 8; 
                 break;
             case 0xE4:
-                // CALL P,nn variant - consumes 2 immediate bytes
+                
                 fetch(); // Consome o byte imediato
-                cycles = 8; // Timing preciso para este opcode não documentado
+                cycles = 8; 
                 break;
             // PUSH HL
             case 0xE5: pushWord(getHL()); cycles = 16; break;
@@ -560,20 +544,18 @@ public class CPU {
             case 0xE9: pc = getHL(); cycles = 4; break;
             // LD (a16),A
             case 0xEA: mmu.writeByte(fetchWord(), a); cycles = 16; break;
-            // Opcodes 0xEB, 0xEC, 0xED (undocumented - EX variants from Z80 - effectively NOP in Game Boy)
-            // These are Z80 instructions that don't have functionality in the LR35902
+           
             case 0xEB: 
-                // EX DE,HL - exchange DE and HL registers (Z80 only)
-                cycles = 8; // EX DE,HL variant - timing preciso
+               
+                cycles = 8; 
                 break;
             case 0xEC:
-                // CALL P,nn - conditional call (Z80 only)
-                fetchWord(); // Consome dois bytes imediatos
-                cycles = 12; // Timing preciso para este opcode não documentado
+                
+                fetchWord(); 
+                cycles = 12; 
                 break;
             case 0xED:
-                // Extended instruction prefix (Z80 only)
-                cycles = 8; // Timing preciso para este opcode não documentado  
+                cycles = 8; 
                 break;
             // XOR A,d8
             case 0xEE: xorA(fetch()); cycles = 8; break;
@@ -588,13 +570,9 @@ public class CPU {
             case 0xF2: a = mmu.readByte(0xFF00 + (c & 0xFF)); cycles = 8; break;
             // DI
             case 0xF3: ime = false; cycles = 4; break;
-            // Opcode 0xF4 (undocumented - CALL P,nn variant - effectively NOP in Game Boy)
-            // Timing: 12 cycles total (4 for opcode fetch + 8 for word fetch)
-            // Behavior: Consumes 2 immediate bytes but performs no operation
-            // Flags: No flags affected
             case 0xF4:
-                fetchWord(); // Consome dois bytes imediatos, mas não faz nada com eles
-                cycles = 12; // Timing preciso para este opcode não documentado
+                fetchWord(); 
+                cycles = 12; 
                 break;
             // PUSH AF
             case 0xF5: pushWord(getAF()); cycles = 16; break;
@@ -610,16 +588,12 @@ public class CPU {
             case 0xFA: a = mmu.readByte(fetchWord()); cycles = 16; break;
             // EI
             case 0xFB: ime = true; cycles = 4; break;
-            // Opcodes 0xFC, 0xFD (undocumented - CALL M,nn variants - effectively NOP in Game Boy)
-            // These are Z80 conditional call instructions that don't function in LR35902
             case 0xFC:
-                // CALL M,nn - call if minus flag set (Z80 only)
-                fetchWord(); // Consome dois bytes imediatos
-                cycles = 12; // Timing preciso para este opcode não documentado
+                fetchWord(); 
+                cycles = 12; 
                 break;
             case 0xFD:
-                // IY prefix - index register Y prefix (Z80 only)
-                cycles = 8; // Timing preciso para este opcode não documentado
+                cycles = 8; 
                 break;
             // CP A,d8
             case 0xFE: cpA(fetch()); cycles = 8; break;
@@ -639,7 +613,7 @@ public class CPU {
         int cbOpcode = fetch();
         cycles = 8; // A maioria das instruções CB leva 8 ciclos, exceto as (HL) que levam mais
 
-        switch (cbOpcode & 0xF0) { // High nibble
+        switch (cbOpcode & 0xF0) {
             case 0x00: // RLC r, RRC r
                 if ((cbOpcode & 0x08) == 0) { // RLC
                     switch (cbOpcode & 0x07) {
@@ -1121,7 +1095,7 @@ public class CPU {
         int correction = 0;
         boolean needsCarry = false;
 
-        if (!getSubtractFlag()) { // after addition
+        if (!getSubtractFlag()) {
             if (getCarryFlag() || a > 0x99) {
                 correction |= 0x60;
                 needsCarry = true;
@@ -1129,7 +1103,7 @@ public class CPU {
             if (getHalfCarryFlag() || (a & 0x0F) > 0x09) {
                 correction |= 0x06;
             }
-        } else { // after subtraction
+        } else { 
             if (getCarryFlag()) {
                 correction |= 0x60;
                 needsCarry = true;
@@ -1183,8 +1157,6 @@ public class CPU {
             return;
         }
 
-        // HALT é encerrado se qualquer interrupção (mesmo desabilitada no IE) estiver pendente no IF
-        // Nota: O HALT bug já foi tratado na execução da instrução HALT
         halted = false;
 
         if (!ime) {
@@ -1196,7 +1168,7 @@ public class CPU {
         // Consome 20 ciclos para o despacho da interrupção
         cycles += 20;
 
-        if ((requestedAndEnabled & 0x01) != 0) { // VBlank (Bit 0, highest priority)
+        if ((requestedAndEnabled & 0x01) != 0) { 
             mmu.writeByte(0xFF0F, IF & ~0x01);
             rst(0x0040);
         } else if ((requestedAndEnabled & 0x02) != 0) { // LCD STAT (Bit 1)
@@ -1208,11 +1180,11 @@ public class CPU {
         } else if ((requestedAndEnabled & 0x08) != 0) { // Serial (Bit 3)
             mmu.writeByte(0xFF0F, IF & ~0x08);
             rst(0x0058);
-        } else if ((requestedAndEnabled & 0x10) != 0) { // Joypad (Bit 4, lowest priority)
+        } else if ((requestedAndEnabled & 0x10) != 0) { 
             mmu.writeByte(0xFF0F, IF & ~0x10);
             rst(0x0060);
         } else {
-            // Nenhuma interrupção foi tratada, reabilitar IME
+            
             ime = true;
         }
     }
@@ -1250,4 +1222,38 @@ public class CPU {
                 a, f, b, c, d, e, h, l, sp, pc, ime,
                 getZeroFlag() ? 1:0, getSubtractFlag() ? 1:0, getHalfCarryFlag() ? 1:0, getCarryFlag() ? 1:0);
     }
+    
+
+    public int getA() { return a; }
+    public void setA(int value) { a = value & 0xFF; }
+    
+    public int getB() { return b; }
+    public void setB(int value) { b = value & 0xFF; }
+    
+    public int getC() { return c; }
+    public void setC(int value) { c = value & 0xFF; }
+    
+    public int getD() { return d; }
+    public void setD(int value) { d = value & 0xFF; }
+    
+    public int getE() { return e; }
+    public void setE(int value) { e = value & 0xFF; }
+    
+    public int getH() { return h; }
+    public void setH(int value) { h = value & 0xFF; }
+    
+    public int getL() { return l; }
+    public void setL(int value) { l = value & 0xFF; }
+    
+    public int getF() { return f; }
+    public void setF(int value) { f = value & 0xF0; } // F só usa 4 bits superiores
+    
+    public int getSP() { return sp; }
+    public void setSP(int value) { sp = value & 0xFFFF; }
+    
+    public void setPC(int value) { pc = value & 0xFFFF; }
+    
+    public void setHalted(boolean value) { halted = value; }
+    
+   
 }

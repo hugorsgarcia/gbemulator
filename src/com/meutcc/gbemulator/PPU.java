@@ -1083,4 +1083,59 @@ public class PPU {
     public int getPpuMode() {
         return ppuMode;
     }
+
+    // Save/Load State
+    public void saveState(java.io.DataOutputStream dos) throws java.io.IOException {
+        // Save VRAM (8KB)
+        for (int i = 0; i < vram.length; i++) {
+            dos.writeByte(vram[i]);
+        }
+        // Save OAM (160 bytes)
+        for (int i = 0; i < oam.length; i++) {
+            dos.writeByte(oam[i]);
+        }
+        // Save LCD registers
+        dos.writeByte(lcdc);
+        dos.writeByte(stat);
+        dos.writeByte(scy);
+        dos.writeByte(scx);
+        dos.writeByte(ly);
+        dos.writeByte(lyc);
+        dos.writeByte(bgp);
+        dos.writeByte(obp0);
+        dos.writeByte(obp1);
+        dos.writeByte(wy);
+        dos.writeByte(wx);
+        // Save PPU state
+        dos.writeInt(ppuMode);
+        dos.writeInt(cyclesCounter);
+        dos.writeBoolean(frameCompleted);
+    }
+
+    public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
+        // Load VRAM
+        for (int i = 0; i < vram.length; i++) {
+            vram[i] = dis.readByte();
+        }
+        // Load OAM
+        for (int i = 0; i < oam.length; i++) {
+            oam[i] = dis.readByte();
+        }
+        // Load LCD registers
+        lcdc = dis.readByte();
+        stat = dis.readByte();
+        scy = dis.readByte();
+        scx = dis.readByte();
+        ly = dis.readByte();
+        lyc = dis.readByte();
+        bgp = dis.readByte();
+        obp0 = dis.readByte();
+        obp1 = dis.readByte();
+        wy = dis.readByte();
+        wx = dis.readByte();
+        // Load PPU state
+        ppuMode = dis.readInt();
+        cyclesCounter = dis.readInt();
+        frameCompleted = dis.readBoolean();
+    }
 }

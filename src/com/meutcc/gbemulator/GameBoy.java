@@ -1,5 +1,8 @@
 package com.meutcc.gbemulator;
 
+import java.io.*;
+import java.nio.file.*;
+
 public class GameBoy {
     private final CPU cpu;
     private final MMU mmu;
@@ -94,5 +97,88 @@ public class GameBoy {
 
     public APU getApu() {
         return this.apu;
+    }
+    
+    public Cartridge getCartridge() {
+        return cartridge;
+    }
+    
+    // ========================================================================
+    // SAVE/LOAD STATE
+    // ========================================================================
+    
+    /**
+     * Salva o estado atual do emulador em um arquivo
+     */
+    public void saveState(String filePath) throws IOException {
+        try (DataOutputStream dos = new DataOutputStream(
+                new BufferedOutputStream(new FileOutputStream(filePath)))) {
+            
+            // Header
+            dos.writeInt(0x47425353); // "GBSS" - GameBoy Save State
+            dos.writeInt(1); // Versão
+            
+            // CPU State
+            dos.writeInt(cpu.getA());
+            dos.writeInt(cpu.getB());
+            dos.writeInt(cpu.getC());
+            dos.writeInt(cpu.getD());
+            dos.writeInt(cpu.getE());
+            dos.writeInt(cpu.getH());
+            dos.writeInt(cpu.getL());
+            dos.writeInt(cpu.getF());
+            dos.writeInt(cpu.getSP());
+            dos.writeInt(cpu.getPC());
+            dos.writeBoolean(cpu.getIME());
+            dos.writeBoolean(cpu.isHalted());
+            
+            // MMU/PPU/APU states serão salvos pelos respectivos componentes
+            mmu.saveState(dos);
+            ppu.saveState(dos);
+            apu.saveState(dos);
+            
+            System.out.println("Estado salvo: " + filePath);
+        }
+    }
+    
+    /**
+     * Carrega um estado salvo de um arquivo
+     */
+    public void loadState(String filePath) throws IOException {
+        try (DataInputStream dis = new DataInputStream(
+                new BufferedInputStream(new FileInputStream(filePath)))) {
+            
+            // Header
+            int magic = dis.readInt();
+            if (magic != 0x47425353) {
+                throw new IOException("Arquivo de save state inválido");
+            }
+            
+            int version = dis.readInt();
+            if (version != 1) {
+                throw new IOException("Versão de save state não suportada: " + version);
+            }
+            
+            // CPU State
+            cpu.setA(dis.readInt());
+            cpu.setB(dis.readInt());
+            cpu.setC(dis.readInt());
+            cpu.setD(dis.readInt());
+            cpu.setE(dis.readInt());
+            cpu.setH(dis.readInt());
+            cpu.setL(dis.readInt());
+            cpu.setF(dis.readInt());
+            cpu.setSP(dis.readInt());
+            cpu.setPC(dis.readInt());
+            cpu.setIME(dis.readBoolean());
+            cpu.setHalted(dis.readBoolean());
+            
+            // MMU/PPU/APU states
+            mmu.loadState(dis);
+            ppu.loadState(dis);
+            apu.loadState(dis);
+            
+            System.out.println("Estado carregado: " + filePath);
+        }
     }
 }

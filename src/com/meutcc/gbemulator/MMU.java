@@ -503,4 +503,37 @@ public class MMU {
         public final int bit;
         Button(int bit) { this.bit = bit; }
     }
+
+    // Save/Load State
+    public void saveState(java.io.DataOutputStream dos) throws java.io.IOException {
+        // Save WRAM (0xC000-0xDFFF)
+        for (int i = 0xC000; i <= 0xDFFF; i++) {
+            dos.writeByte(memory[i]);
+        }
+        // Save HRAM (0xFF80-0xFFFE)
+        for (int i = 0xFF80; i <= 0xFFFE; i++) {
+            dos.writeByte(memory[i]);
+        }
+        // Save I/O registers
+        dos.writeByte(joypadState);
+        dos.writeInt(divCounter);
+        dos.writeByte(memory[REG_IF]);
+        dos.writeByte(memory[REG_IE]);
+    }
+
+    public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
+        // Load WRAM
+        for (int i = 0xC000; i <= 0xDFFF; i++) {
+            memory[i] = dis.readByte();
+        }
+        // Load HRAM
+        for (int i = 0xFF80; i <= 0xFFFE; i++) {
+            memory[i] = dis.readByte();
+        }
+        // Load I/O registers
+        joypadState = dis.readByte();
+        divCounter = dis.readInt();
+        memory[REG_IF] = dis.readByte();
+        memory[REG_IE] = dis.readByte();
+    }
 }
