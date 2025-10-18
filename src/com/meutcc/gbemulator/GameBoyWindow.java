@@ -9,7 +9,11 @@ public class GameBoyWindow extends JFrame {
 
     private static final int SCREEN_WIDTH = 160;
     private static final int SCREEN_HEIGHT = 144;
-    private static final int SCALE = 3;
+    private static final int DEFAULT_SCALE = 3;
+    private static final int MIN_SCALE = 1;
+    
+    // Proporção do Game Boy: 160:144 = 10:9
+    private static final double ASPECT_RATIO = (double) SCREEN_WIDTH / SCREEN_HEIGHT;
 
     private final GameBoyScreenPanel screenPanel;
     private final GameBoy gameBoy;
@@ -23,7 +27,7 @@ public class GameBoyWindow extends JFrame {
     public GameBoyWindow() {
         setTitle("GameBoy Emulator TCC");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setResizable(false);
+        setResizable(true); // MUDADO: Agora é redimensionável
 
 
         gameBoy = new GameBoy();
@@ -40,7 +44,17 @@ public class GameBoyWindow extends JFrame {
         JMenuItem loadRomItem = new JMenuItem("Load ROM...");
         loadRomItem.addActionListener(e -> openRomChooser());
         fileMenu.add(loadRomItem);
+        
+        // Adicionar opção de tamanho de janela
+        JMenu windowMenu = new JMenu("Janela");
+        for (int scale = 1; scale <= 6; scale++) {
+            final int currentScale = scale;
+            JMenuItem scaleItem = new JMenuItem(scale + "x (" + (SCREEN_WIDTH * scale) + "x" + (SCREEN_HEIGHT * scale) + ")");
+            scaleItem.addActionListener(e -> setWindowSize(currentScale));
+            windowMenu.add(scaleItem);
+        }
         menuBar.add(fileMenu);
+        menuBar.add(windowMenu);
 
         JMenu controlMenu = new JMenu("Controle");
         JMenuItem showControlsItem = new JMenuItem("Exibir Controles do Teclado");
@@ -99,6 +113,13 @@ public class GameBoyWindow extends JFrame {
                 "Enter: Start\n" +
                 "Shift: Select\n";
         JOptionPane.showMessageDialog(this, mapping, "Controles do Teclado", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void setWindowSize(int scale) {
+        // Define o tamanho da janela baseado na escala
+        screenPanel.setPreferredSize(new Dimension(SCREEN_WIDTH * scale, SCREEN_HEIGHT * scale));
+        pack();
+        setLocationRelativeTo(null); // Recentra a janela
     }
 
 
@@ -263,7 +284,11 @@ public class GameBoyWindow extends JFrame {
         private BufferedImage screenBuffer;
 
         public GameBoyScreenPanel() {
-            setPreferredSize(new Dimension(SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE));
+            // Tamanho inicial 3x
+            setPreferredSize(new Dimension(SCREEN_WIDTH * DEFAULT_SCALE, SCREEN_HEIGHT * DEFAULT_SCALE));
+            setMinimumSize(new Dimension(SCREEN_WIDTH * MIN_SCALE, SCREEN_HEIGHT * MIN_SCALE));
+            setBackground(Color.BLACK);
+            
             this.screenBuffer = new BufferedImage(SCREEN_WIDTH, SCREEN_HEIGHT, BufferedImage.TYPE_INT_RGB);
             Graphics2D g2d = this.screenBuffer.createGraphics();
             g2d.setColor(Color.DARK_GRAY);
@@ -281,9 +306,44 @@ public class GameBoyWindow extends JFrame {
         @Override
         protected void paintComponent(Graphics g) {
             super.paintComponent(g);
-            if (screenBuffer != null) {
-                g.drawImage(screenBuffer, 0, 0, getWidth(), getHeight(), null);
+            
+            if (screenBuffer == null) return;
+            
+            Graphics2D g2d = (Graphics2D) g;
+            
+            // Desabilita interpolação para manter pixels nítidos (pixel perfect)
+            g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+            g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
+            
+            int panelWidth = getWidth();
+            int panelHeight = getHeight();
+            
+            // Calcula o maior tamanho inteiro que mantém a proporção 10:9 (160:144)
+            // e cabe dentro do painel
+            int scaledWidth, scaledHeight;
+            
+            // Tenta ajustar pela largura
+            scaledWidth = panelWidth;
+            scaledHeight = (int) (panelWidth / ASPECT_RATIO);
+            
+            // Se a altura calculada for maior que o painel, ajusta pela altura
+            if (scaledHeight > panelHeight) {
+                scaledHeight = panelHeight;
+                scaledWidth = (int) (panelHeight * ASPECT_RATIO);
             }
+            
+            // Pixel perfect: arredonda para múltiplos inteiros da resolução original
+            int scale = Math.max(1, Math.min(scaledWidth / SCREEN_WIDTH, scaledHeight / SCREEN_HEIGHT));
+            scaledWidth = SCREEN_WIDTH * scale;
+            scaledHeight = SCREEN_HEIGHT * scale;
+            
+            // Centraliza a imagem no painel
+            int x = (panelWidth - scaledWidth) / 2;
+            int y = (panelHeight - scaledHeight) / 2;
+            
+            // Desenha a imagem escalada
+            g2d.drawImage(screenBuffer, x, y, scaledWidth, scaledHeight, null);
         }
     }
 }
