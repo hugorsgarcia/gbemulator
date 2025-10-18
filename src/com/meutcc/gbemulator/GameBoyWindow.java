@@ -148,46 +148,82 @@ public class GameBoyWindow extends JFrame {
 
     private void emulationLoop() {
         final int CYCLES_PER_FRAME = 70224;
-        final long NANOSECONDS_PER_FRAME = 1_000_000_000L / 60;
-
-        long lastTime = System.nanoTime();
+        final long NANOSECONDS_PER_FRAME = 1_000_000_000L / 60; // ~16.67ms por frame
+        
         gameBoy.reset();
-        // reconfirma o estado do som, o reset pode alterar flags na APU ou em outros componentes que afetam a APU.
         gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
 
+        long lastTime = System.nanoTime();
+        long accumulatedTime = 0;
+        int frameCount = 0;
+        
+        // Para estatísticas de desempenho (opcional, pode comentar depois)
+        long fpsTimer = System.currentTimeMillis();
 
         while (running) {
-            int cyclesThisFrame = 0;
-            while (cyclesThisFrame < CYCLES_PER_FRAME) {
-                int cycles = gameBoy.step();
-                if (cycles == -1) { // CPU Halted indefinidamente ou erro fatal
-                    running = false;
-                    System.err.println("CPU Halted or fatal error in emulation step.");
-                    break;
+            long currentTime = System.nanoTime();
+            long frameTime = currentTime - lastTime;
+            lastTime = currentTime;
+            
+            // Limita o frameTime para evitar saltos grandes após pausas
+            if (frameTime > NANOSECONDS_PER_FRAME * 2) {
+                frameTime = NANOSECONDS_PER_FRAME;
+            }
+            
+            accumulatedTime += frameTime;
+
+            // Processa frames acumulados (geralmente apenas 1)
+            while (accumulatedTime >= NANOSECONDS_PER_FRAME) {
+                // Executa um frame completo do Game Boy
+                int cyclesThisFrame = 0;
+                while (cyclesThisFrame < CYCLES_PER_FRAME) {
+                    int cycles = gameBoy.step();
+                    if (cycles == -1) {
+                        running = false;
+                        System.err.println("CPU Halted or fatal error in emulation step.");
+                        break;
+                    }
+                    cyclesThisFrame += cycles;
                 }
-                cyclesThisFrame += cycles;
+
+                if (!running) break;
+                
+                accumulatedTime -= NANOSECONDS_PER_FRAME;
+                frameCount++;
             }
 
-            if (!running) break; // Sai do loop principal se a emulação foi parada
+            if (!running) break;
 
+            // Atualiza a tela
             screenPanel.updateScreen(gameBoy.getPpu().getScreenBuffer());
 
-            long currentTime = System.nanoTime();
-            long elapsedTime = currentTime - lastTime;
-            long sleepTime = NANOSECONDS_PER_FRAME - elapsedTime;
-
-            if (sleepTime > 0) {
+            // Sleep adaptativo para manter 60 FPS
+            long nextFrameTime = lastTime + NANOSECONDS_PER_FRAME - accumulatedTime;
+            long sleepTime = nextFrameTime - System.nanoTime();
+            
+            if (sleepTime > 1_000_000) { // Só dorme se tiver mais de 1ms
                 try {
-                    Thread.sleep(sleepTime / 1_000_000, (int) (sleepTime % 1_000_000));
+                    long sleepMs = sleepTime / 1_000_000;
+                    int sleepNs = (int) (sleepTime % 1_000_000);
+                    Thread.sleep(sleepMs, sleepNs);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    running = false; //sai loop se a thread for interrompida
+                    running = false;
                 }
+            } else if (sleepTime < -NANOSECONDS_PER_FRAME) {
+                // Emulação está muito atrasada, reseta o acumulador
+                accumulatedTime = 0;
             }
-            lastTime = System.nanoTime();
+
+            // Estatísticas de FPS (opcional - mostra a cada 1 segundo)
+            if (System.currentTimeMillis() - fpsTimer > 1000) {
+                System.out.println("FPS: " + frameCount);
+                frameCount = 0;
+                fpsTimer = System.currentTimeMillis();
+            }
 
             if (!this.hasFocus() && this.isFocusOwner()) {
-                 this.requestFocusInWindow();
+                this.requestFocusInWindow();
             }
         }
         System.out.println("Emulation loop stopped.");

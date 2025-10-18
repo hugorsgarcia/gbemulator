@@ -34,9 +34,9 @@ public class APU {
     private static final boolean SIGNED = true;
     private static final boolean BIG_ENDIAN = false;
     
-    // Buffer sizes
-    private static final int AUDIO_OUTPUT_BUFFER_SAMPLES = 2048;
-    private static final int INTERNAL_SAMPLE_BUFFER_SIZE = 512;
+    // Buffer sizes (aumentados para evitar travamentos/underruns)
+    private static final int AUDIO_OUTPUT_BUFFER_SAMPLES = 32768;  // Aumentado de 2048
+    private static final int INTERNAL_SAMPLE_BUFFER_SIZE = 8192;  // Aumentado de 512
     
     // Timing
     private static final double CYCLES_PER_OUTPUT_SAMPLE = (double) CPU_CLOCK_SPEED / SAMPLE_RATE;
@@ -479,6 +479,17 @@ public class APU {
         }
 
         int bytesToWrite = internalBufferPos * 2 * (SAMPLE_SIZE_BITS / 8);
+        
+        // Verifica se há espaço suficiente no buffer antes de escrever
+        // Isso evita bloqueios que causam travamentos
+        int available = sourceDataLine.available();
+        if (available < bytesToWrite) {
+            // Buffer está muito cheio, não escreve para evitar bloqueio
+            // Isso pode acontecer se a emulação está rodando mais rápido que o áudio
+            internalBufferPos = 0;
+            return;
+        }
+        
         sourceDataLine.write(outputByteBuffer, 0, bytesToWrite);
         internalBufferPos = 0;
     }
