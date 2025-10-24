@@ -7,24 +7,12 @@ public class InputHandler implements KeyListener {
 
     private final MMU mmu;
 
-    // Mapeamento de teclas do teclado para botões do Game Boy
-    // Exemplo:
-    // Direita: Seta Direita
-    // Esquerda: Seta Esquerda
-    // Cima: Seta Cima
-    // Baixo: Seta Baixo
-    // A: Tecla Z
-    // B: Tecla X
-    // Start: Enter
-    // Select: Shift Direita
-
     public InputHandler(MMU mmu) {
         this.mmu = mmu;
     }
 
     @Override
     public void keyTyped(KeyEvent e) {
-        // Não usado
     }
 
     @Override
@@ -52,9 +40,7 @@ public class InputHandler implements KeyListener {
             case KeyEvent.VK_Z:     return MMU.Button.GAMEBOY_A;
             case KeyEvent.VK_X:     return MMU.Button.GAMEBOY_B;
             case KeyEvent.VK_ENTER: return MMU.Button.GAMEBOY_START;
-            case KeyEvent.VK_SHIFT: // Usar SHIFT direito ou esquerdo. VK_SHIFT é genérico.
-                // Poderia ser VK_CONTROL para SELECT, por exemplo.
-                return MMU.Button.GAMEBOY_SELECT;
+            case KeyEvent.VK_SHIFT: return MMU.Button.GAMEBOY_SELECT;
             default: return null;
         }
     }

@@ -257,12 +257,10 @@ public class APU {
                 audioRegisters[address - 0xFF10] = value;
                 break;
 
-           
             default:
                 if (address >= 0xFF30 && address <= 0xFF3F) {
                     if (masterSoundEnable) {
                         wavePatternRam[address - 0xFF30] = value;
-                        channel3.updateWaveRamByte(address - 0xFF30, value);
                     }
                 }
                 break;
@@ -744,10 +742,6 @@ public class APU {
             if ((val & 0x80) != 0) {
                 trigger();
             }
-        }
-
-        public void updateWaveRamByte(int offset, byte value) {
-            // Wave RAM atualizada em tempo real
         }
 
         @Override

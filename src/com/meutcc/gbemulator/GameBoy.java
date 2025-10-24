@@ -1,7 +1,6 @@
 package com.meutcc.gbemulator;
 
 import java.io.*;
-import java.nio.file.*;
 
 public class GameBoy {
     private final CPU cpu;

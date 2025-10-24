@@ -1,53 +1,39 @@
 package com.meutcc.gbemulator;
 
-import java.util.Arrays;
-
-// Representa a CPU Sharp LR35902
 public class CPU {
 
     private final MMU mmu;
 
-    // Registradores de 8 bits
     private int a, f, b, c, d, e, h, l;
-    // Registradores de 16 bits
-    private int sp; // Stack Pointer
-    private int pc; // Program Counter
+    private int sp;
+    private int pc;
 
-    // Flags (no registrador F)
-    // Bit 7: Zero (Z)
-    // Bit 6: Subtraction (N)
-    // Bit 5: Half Carry (H)
-    // Bit 4: Carry (C)
-    // Bits 3-0: Não usados (sempre 0)
     private static final int ZERO_FLAG = 0x80;
     private static final int SUBTRACT_FLAG = 0x40;
     private static final int HALF_CARRY_FLAG = 0x20;
     private static final int CARRY_FLAG = 0x10;
 
-    private boolean ime; // Interrupt Master Enable
+    private boolean ime;
     private boolean halted;
-    private int cycles = 0; // Ciclos da instrução atual
+    private int cycles = 0;
     
-    // Contador para debug de opcodes não documentados
     private boolean debugUndocumentedOpcodes = false;
     
-    // Estado do HALT bug - quando IME=0 mas há interrupção pendente
     private boolean haltBugTriggered = false;
 
     public CPU(MMU mmu) {
         this.mmu = mmu;
-        // A MMU precisa de uma referência à CPU para resetar o acumulador do DIV.
         mmu.setCpu(this);
         reset();
     }
 
     public void reset() {
-        a = 0x01; f = 0xB0; // Padrão para DMG Pós-BootROM.
+        a = 0x01; f = 0xB0;
         b = 0x00; c = 0x13;
         d = 0x00; e = 0xD8;
         h = 0x01; l = 0x4D;
         sp = 0xFFFE;
-        pc = 0x0100; // Ponto de entrada
+        pc = 0x0100;
         cycles = 0;
         ime = false;
         halted = false;
