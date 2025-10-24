@@ -292,33 +292,32 @@ public class GameBoyWindow extends JFrame {
 
     private void emulationLoop() {
         final int CYCLES_PER_FRAME = 70224;
-        final long NANOSECONDS_PER_FRAME = 1_000_000_000L / 60; // ~16.67ms por frame
+        final long NANOSECONDS_PER_FRAME = 1_000_000_000L / 60;
         
         gameBoy.reset();
         gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
 
         long lastTime = System.nanoTime();
         long accumulatedTime = 0;
-        int frameCount = 0;
+        int actualFramesRendered = 0;
+        int loopIterations = 0;
         
-        // Para estatísticas de desempenho (opcional, pode comentar depois)
         long fpsTimer = System.currentTimeMillis();
 
         while (running) {
+            loopIterations++;
             long currentTime = System.nanoTime();
             long frameTime = currentTime - lastTime;
             lastTime = currentTime;
             
-            // Limita o frameTime para evitar saltos grandes após pausas
             if (frameTime > NANOSECONDS_PER_FRAME * 2) {
                 frameTime = NANOSECONDS_PER_FRAME;
             }
             
             accumulatedTime += frameTime;
 
-            // Processa frames acumulados (geralmente apenas 1)
-            while (accumulatedTime >= NANOSECONDS_PER_FRAME && !paused) {
-                // Executa um frame completo do Game Boy
+            int framesProcessedThisIteration = 0;
+            while (accumulatedTime >= NANOSECONDS_PER_FRAME && !paused && framesProcessedThisIteration < 3) {
                 int cyclesThisFrame = 0;
                 while (cyclesThisFrame < CYCLES_PER_FRAME) {
                     int cycles = gameBoy.step();
@@ -333,10 +332,13 @@ public class GameBoyWindow extends JFrame {
                 if (!running) break;
                 
                 accumulatedTime -= NANOSECONDS_PER_FRAME;
-                frameCount++;
+                framesProcessedThisIteration++;
+            }
+            
+            if (framesProcessedThisIteration >= 3) {
+                accumulatedTime = 0;
             }
 
-            // Se está pausado, reseta o acumulador para não processar frames acumulados
             if (paused) {
                 accumulatedTime = 0;
                 lastTime = System.nanoTime();
@@ -344,14 +346,15 @@ public class GameBoyWindow extends JFrame {
 
             if (!running) break;
 
-            // Atualiza a tela
-            screenPanel.updateScreen(gameBoy.getPpu().getScreenBuffer());
+            if (gameBoy.getPpu().isFrameCompleted()) {
+                screenPanel.updateScreen(gameBoy.getPpu().getScreenBuffer());
+                actualFramesRendered++;
+            }
 
-            // Sleep adaptativo para manter 60 FPS
             long nextFrameTime = lastTime + NANOSECONDS_PER_FRAME - accumulatedTime;
             long sleepTime = nextFrameTime - System.nanoTime();
             
-            if (sleepTime > 1_000_000) { // Só dorme se tiver mais de 1ms
+            if (sleepTime > 1_000_000) {
                 try {
                     long sleepMs = sleepTime / 1_000_000;
                     int sleepNs = (int) (sleepTime % 1_000_000);
@@ -361,14 +364,13 @@ public class GameBoyWindow extends JFrame {
                     running = false;
                 }
             } else if (sleepTime < -NANOSECONDS_PER_FRAME) {
-                // Emulação está muito atrasada, reseta o acumulador
                 accumulatedTime = 0;
             }
 
-            // Estatísticas de FPS (opcional - mostra a cada 1 segundo)
             if (System.currentTimeMillis() - fpsTimer > 1000) {
-                System.out.println("FPS: " + frameCount);
-                frameCount = 0;
+                System.out.println("FPS: " + actualFramesRendered + " | Loops/sec: " + loopIterations);
+                actualFramesRendered = 0;
+                loopIterations = 0;
                 fpsTimer = System.currentTimeMillis();
             }
 
