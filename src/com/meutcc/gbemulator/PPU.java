@@ -90,6 +90,7 @@ public class PPU {
     private int scanlineCycles; // Ciclos acumulados na scanline atual (para timing preciso)
     private boolean statInterruptLine; // Estado da linha de interrupção STAT (para edge detection)
     private int mode3Duration; // Duração calculada do modo 3 para scanline atual
+    private int windowLineCounter; // Contador interno de linha da Window (incrementado quando window é renderizada)
 
     private MMU mmu; // Referência à MMU para solicitar interrupções
 
@@ -124,6 +125,7 @@ public class PPU {
         scanlineCycles = 0;
         statInterruptLine = false;
         mode3Duration = MODE_3_BASE_CYCLES;
+        windowLineCounter = 0; // Reset do contador de linha da Window
         
         System.out.println("PPU reset.");
     }
@@ -263,6 +265,7 @@ public class PPU {
                 // Fim do V-Blank, reiniciar frame
                 ly = 0;
                 ppuMode = 2;
+                windowLineCounter = 0; // Reset do contador de linha da Window no início do frame
                 if (mmu != null) {
                     mmu.writeByte(MMU.REG_LY, ly);
                 }
@@ -593,11 +596,9 @@ public class PPU {
             int colorBit1 = (msb >> bitPosition) & 1;
             int colorIndex = (colorBit1 << 1) | colorBit0;
 
-            // Cor 0 da janela é transparente para o background.
-            // Outras cores da janela sobrescrevem o background.
-            if (colorIndex != 0) {
-                scanlinePixels[x] = getColorFromPalette(colorIndex, bgp); // Window usa BGP
-            }
+            // A Window SEMPRE sobrescreve o background (incluindo cor 0)
+            // Window não é transparente como sprites
+            scanlinePixels[x] = getColorFromPalette(colorIndex, bgp); // Window usa BGP
         }
     }
 
@@ -615,14 +616,20 @@ public class PPU {
         // Se WX < 7, a janela começa na borda esquerda.
         int actualWX = wx - 7;
 
-        // Posição Y na janela
-        int yInWindow = ly - wy; // Linha atual relativa ao topo da janela
+        // Verificar se a window está visível nesta scanline (se pelo menos um pixel será desenhado)
+        boolean windowRenderedThisLine = false;
+
+        // Usar o contador interno da Window ao invés de ly - wy
+        // O contador só incrementa quando a window é realmente renderizada
+        int yInWindow = windowLineCounter;
         int tileRowInMap = yInWindow / 8;
         int yInTile = yInWindow % 8;
 
         for (int x = 0; x < SCREEN_WIDTH; x++) {
             // A janela só cobre pixels onde x >= WX'
             if (x < actualWX) continue;
+
+            windowRenderedThisLine = true; // Pelo menos um pixel da window será desenhado
 
             int xInWindow = x - actualWX; // Coordenada X relativa à borda esquerda da janela
             int tileColInMap = xInWindow / 8;
@@ -640,7 +647,7 @@ public class PPU {
 
             int tileAddress;
             if (signedAddressing) {
-                tileAddress = tileDataArea + ((byte)tileIndex * 16);
+                tileAddress = 0x9000 + ((byte)tileIndex * 16);
             } else {
                 tileAddress = tileDataArea + (tileIndex * 16);
             }
@@ -656,11 +663,14 @@ public class PPU {
             int colorBit1 = (msb >> bitPosition) & 1;
             int colorIndex = (colorBit1 << 1) | colorBit0;
 
-            // Cor 0 da janela é transparente para o background.
-            // Outras cores da janela sobrescrevem o background.
-            if (colorIndex != 0) {
-                scanlinePixelInfo[x] = new PixelInfo(colorIndex, false, false, bgp); // Window usa BGP
-            }
+            // A Window SEMPRE sobrescreve o background (incluindo cor 0)
+            // Window não é transparente como sprites
+            scanlinePixelInfo[x] = new PixelInfo(colorIndex, false, false, bgp); // Window usa BGP
+        }
+
+        // Incrementar o contador interno da Window apenas se ela foi renderizada nesta linha
+        if (windowRenderedThisLine) {
+            windowLineCounter++;
         }
     }
 
