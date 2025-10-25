@@ -91,6 +91,11 @@ public class PPU {
     private boolean statInterruptLine; // Estado da linha de interrupção STAT (para edge detection)
     private int mode3Duration; // Duração calculada do modo 3 para scanline atual
     private int windowLineCounter; // Contador interno de linha da Window (incrementado quando window é renderizada)
+    
+    // Pixel FIFO para renderização pixel-a-pixel (para efeitos mid-scanline)
+    private int pixelX; // Posição X atual do pixel sendo renderizado (0-159)
+    private boolean enablePixelFifo; // Habilita renderização pixel-a-pixel para efeitos mid-scanline
+    private PixelInfo[] currentScanlineBuffer; // Buffer temporário da scanline atual
 
     private MMU mmu; // Referência à MMU para solicitar interrupções
 
@@ -126,6 +131,14 @@ public class PPU {
         statInterruptLine = false;
         mode3Duration = MODE_3_BASE_CYCLES;
         windowLineCounter = 0; // Reset do contador de linha da Window
+        
+        // Inicializar pixel FIFO
+        pixelX = 0;
+        enablePixelFifo = false; // Desabilitado por padrão para compatibilidade
+        currentScanlineBuffer = new PixelInfo[SCREEN_WIDTH];
+        for (int i = 0; i < SCREEN_WIDTH; i++) {
+            currentScanlineBuffer[i] = new PixelInfo();
+        }
         
         System.out.println("PPU reset.");
     }
@@ -192,6 +205,7 @@ public class PPU {
     private void updateOamScanMode() {
         if (cyclesCounter >= MODE_2_CYCLES) {
             cyclesCounter = 0;
+            pixelX = 0; // Reset do pixel X para nova scanline
             ppuMode = 3;
             
             // Calcular duração do modo 3 baseado no conteúdo da scanline
@@ -204,17 +218,35 @@ public class PPU {
      * Modo 3: Drawing (172-289 ciclos variável)
      */
     private void updateDrawingMode() {
-        // Usar renderização tradicional por scanline
-        if (cyclesCounter == 1) { // Renderizar no primeiro ciclo do modo 3
-            if (ly < SCREEN_HEIGHT) {
-                renderScanline();
+        if (enablePixelFifo) {
+            // Renderização pixel-a-pixel para efeitos mid-scanline
+            // A cada ~4 ciclos, renderizar 1 pixel (aproximação)
+            if (cyclesCounter % 4 == 0 && pixelX < SCREEN_WIDTH) {
+                renderSinglePixel(pixelX);
+                pixelX++;
             }
-        }
-        
-        if (cyclesCounter >= mode3Duration) {
-            cyclesCounter = 0;
-            ppuMode = 0;
-            updateStatRegister();
+            
+            if (cyclesCounter >= mode3Duration) {
+                // Fim do modo 3, transferir buffer para tela
+                transferScanlineToScreen();
+                cyclesCounter = 0;
+                pixelX = 0;
+                ppuMode = 0;
+                updateStatRegister();
+            }
+        } else {
+            // Renderização tradicional por scanline completa
+            if (cyclesCounter == 1) { // Renderizar no primeiro ciclo do modo 3
+                if (ly < SCREEN_HEIGHT) {
+                    renderScanline();
+                }
+            }
+            
+            if (cyclesCounter >= mode3Duration) {
+                cyclesCounter = 0;
+                ppuMode = 0;
+                updateStatRegister();
+            }
         }
     }
     
@@ -277,32 +309,254 @@ public class PPU {
     
     /**
      * Calcula a duração do modo 3 baseado no conteúdo da scanline
+     * Baseado em hardware real do Game Boy DMG
+     * Fórmula aproximada: 172 + (sprites * 11) + (scx % 8) + (window penalty)
      */
     private void calculateMode3Duration() {
-        int baseDuration = MODE_3_BASE_CYCLES;
-        int additionalCycles = 0;
+        int duration = MODE_3_BASE_CYCLES; // 172 ciclos base
         
         // Adicionar ciclos por sprites visíveis na scanline
+        // Cada sprite adiciona ~11 ciclos (variação: 6-11 ciclos dependendo do alinhamento)
         if (isSpriteDisplayEnabled()) {
             int visibleSprites = countSpritesOnScanline();
-            additionalCycles += visibleSprites; // ~1 ciclo adicional por sprite
+            duration += visibleSprites * 11; // Penalidade por sprite (~11 ciclos no pior caso)
         }
         
-        // Adicionar ciclos se window está ativa
-        if (isWindowDisplayEnabled() && ly >= wy && ly < wy + SCREEN_HEIGHT) {
-            additionalCycles += 6; // Window adiciona alguns ciclos
+        // Scroll horizontal adiciona ciclos (0-7 ciclos extras)
+        // SCX % 8 != 0 causa pixels extras a serem fetchados
+        duration += (scx % 8);
+        
+        // Window adiciona ciclos se estiver ativa nesta scanline
+        if (isWindowDisplayEnabled() && ly >= wy && wx >= 0 && wx <= 166) {
+            // Window adiciona ~6 ciclos quando ativa
+            duration += 6;
         }
         
-        // Scroll horizontal pode adicionar até 8 ciclos
-        if (scx % 8 != 0) {
-            additionalCycles += (8 - (scx % 8));
+        // Limitar ao máximo de 289 ciclos
+        mode3Duration = Math.min(duration, MODE_3_MAX_CYCLES);
+    }
+    
+    /**
+     * Renderiza um único pixel na posição X da scanline atual
+     * Permite efeitos mid-scanline (mudanças de paleta, scroll, etc)
+     */
+    private void renderSinglePixel(int x) {
+        if (x < 0 || x >= SCREEN_WIDTH) return;
+        
+        PixelInfo pixel = new PixelInfo(0, false, false, bgp);
+        
+        // 1. Renderizar Background pixel
+        if (isBgWindowDisplayEnabled()) {
+            pixel = getBackgroundPixel(x, ly);
         }
         
-        mode3Duration = Math.min(baseDuration + additionalCycles, MODE_3_MAX_CYCLES);
+        // 2. Renderizar Window pixel (se aplicável)
+        if (isWindowDisplayEnabled() && isBgWindowDisplayEnabled()) {
+            int actualWX = wx - 7;
+            if (x >= actualWX && ly >= wy) {
+                pixel = getWindowPixel(x, ly);
+            }
+        }
+        
+        // 3. Renderizar Sprite pixel (se aplicável)
+        if (isSpriteDisplayEnabled()) {
+            PixelInfo spritePixel = getSpritePixel(x, ly);
+            if (spritePixel != null) {
+                // Aplicar lógica de prioridade sprite vs BG
+                boolean shouldDraw = true;
+                
+                if (spritePixel.spritePriority && isBgWindowDisplayEnabled() && pixel.colorIndex != 0) {
+                    shouldDraw = false; // BG tem prioridade
+                }
+                
+                if (shouldDraw) {
+                    pixel = spritePixel;
+                }
+            }
+        }
+        
+        currentScanlineBuffer[x] = pixel;
+    }
+    
+    /**
+     * Obtém o pixel de background na posição (x, y)
+     */
+    private PixelInfo getBackgroundPixel(int x, int y) {
+        int tileDataArea = (lcdc & 0x10) != 0 ? 0x8000 : 0x8800;
+        boolean signedAddressing = (tileDataArea == 0x8800);
+        int tileMapArea = (lcdc & 0x08) != 0 ? 0x9C00 : 0x9800;
+
+        int yInBgMap = (y + scy) & 0xFF;
+        int tileRowInMap = yInBgMap / 8;
+        int yInTile = yInBgMap % 8;
+        
+        int xInBgMap = (x + scx) & 0xFF;
+        int tileColInMap = xInBgMap / 8;
+        int xInTile = xInBgMap % 8;
+
+        int tileMapOffset = tileRowInMap * 32 + tileColInMap;
+        int tileIndexAddress = tileMapArea + tileMapOffset;
+        
+        if (tileIndexAddress >= 0xA000) {
+            tileIndexAddress = tileMapArea + (tileMapOffset & 0x3FF);
+        }
+        
+        int tileIndex = vram[tileIndexAddress - 0x8000] & 0xFF;
+
+        int tileAddress;
+        if (signedAddressing) {
+            tileAddress = 0x9000 + ((byte)tileIndex * 16);
+        } else {
+            tileAddress = tileDataArea + (tileIndex * 16);
+        }
+
+        int tileRowDataAddress = tileAddress + (yInTile * 2);
+        
+        if (tileRowDataAddress < 0x8000 || tileRowDataAddress + 1 >= 0xA000) {
+            return new PixelInfo(0, false, false, bgp);
+        }
+
+        int lsb = vram[tileRowDataAddress - 0x8000] & 0xFF;
+        int msb = vram[tileRowDataAddress + 1 - 0x8000] & 0xFF;
+
+        int bitPosition = 7 - xInTile;
+        int colorBit0 = (lsb >> bitPosition) & 1;
+        int colorBit1 = (msb >> bitPosition) & 1;
+        int colorIndex = (colorBit1 << 1) | colorBit0;
+
+        return new PixelInfo(colorIndex, false, false, bgp);
+    }
+    
+    /**
+     * Obtém o pixel de window na posição (x, y)
+     */
+    private PixelInfo getWindowPixel(int x, int y) {
+        int actualWX = wx - 7;
+        if (x < actualWX || y < wy) return null;
+        
+        int tileDataArea = (lcdc & 0x10) != 0 ? 0x8000 : 0x8800;
+        boolean signedAddressing = (tileDataArea == 0x8800);
+        int tileMapArea = (lcdc & 0x40) != 0 ? 0x9C00 : 0x9800;
+
+        int yInWindow = windowLineCounter;
+        int tileRowInMap = yInWindow / 8;
+        int yInTile = yInWindow % 8;
+        
+        int xInWindow = x - actualWX;
+        int tileColInMap = xInWindow / 8;
+        int xInTile = xInWindow % 8;
+
+        if (tileColInMap >= 32) return null;
+
+        int tileMapOffset = tileRowInMap * 32 + tileColInMap;
+        int tileIndexAddress = tileMapArea + tileMapOffset;
+
+        if (tileIndexAddress < 0x8000 || tileIndexAddress >= 0xA000) return null;
+        int tileIndex = vram[tileIndexAddress - 0x8000] & 0xFF;
+
+        int tileAddress;
+        if (signedAddressing) {
+            tileAddress = 0x9000 + ((byte)tileIndex * 16);
+        } else {
+            tileAddress = tileDataArea + (tileIndex * 16);
+        }
+
+        int tileRowDataAddress = tileAddress + (yInTile * 2);
+        if (tileRowDataAddress < 0x8000 || tileRowDataAddress + 1 >= 0xA000) return null;
+
+        int lsb = vram[tileRowDataAddress - 0x8000] & 0xFF;
+        int msb = vram[tileRowDataAddress + 1 - 0x8000] & 0xFF;
+
+        int bitPosition = 7 - xInTile;
+        int colorBit0 = (lsb >> bitPosition) & 1;
+        int colorBit1 = (msb >> bitPosition) & 1;
+        int colorIndex = (colorBit1 << 1) | colorBit0;
+
+        return new PixelInfo(colorIndex, false, false, bgp);
+    }
+    
+    /**
+     * Obtém o pixel de sprite na posição (x, y)
+     * Retorna null se nenhum sprite visível nesta posição
+     */
+    private PixelInfo getSpritePixel(int x, int y) {
+        boolean tallSprites = (lcdc & 0x04) != 0;
+        int spriteHeight = tallSprites ? 16 : 8;
+
+        // Procurar sprites visíveis nesta posição (com prioridade correta)
+        for (int i = 0; i < 40; i++) {
+            int oamAddr = i * 4;
+
+            int spriteY = (oam[oamAddr] & 0xFF) - 16;
+            int spriteX = (oam[oamAddr + 1] & 0xFF) - 8;
+            int tileIndex = oam[oamAddr + 2] & 0xFF;
+            int attributes = oam[oamAddr + 3] & 0xFF;
+
+            // Sprite está na posição (x, y)?
+            if (y >= spriteY && y < (spriteY + spriteHeight) &&
+                x >= spriteX && x < (spriteX + 8)) {
+                
+                boolean yFlip = (attributes & 0x40) != 0;
+                boolean xFlip = (attributes & 0x20) != 0;
+                boolean bgPriority = (attributes & 0x80) != 0;
+                int paletteReg = (attributes & 0x10) != 0 ? obp1 : obp0;
+
+                if (tallSprites) {
+                    tileIndex &= 0xFE;
+                }
+
+                int yInSpriteTile = y - spriteY;
+                if (yFlip) {
+                    yInSpriteTile = (spriteHeight - 1) - yInSpriteTile;
+                }
+
+                if (tallSprites && yInSpriteTile >= 8) {
+                    tileIndex |= 0x01;
+                    yInSpriteTile -= 8;
+                }
+
+                int tileAddress = 0x8000 + (tileIndex * 16);
+                int tileRowDataAddress = tileAddress + (yInSpriteTile * 2);
+
+                if (tileRowDataAddress < 0x8000 || tileRowDataAddress + 1 >= 0xA000) continue;
+
+                int lsb = vram[tileRowDataAddress - 0x8000] & 0xFF;
+                int msb = vram[tileRowDataAddress + 1 - 0x8000] & 0xFF;
+
+                int px = x - spriteX;
+                int xInTilePixel = xFlip ? (7 - px) : px;
+
+                int bitPosition = 7 - xInTilePixel;
+                int colorBit0 = (lsb >> bitPosition) & 1;
+                int colorBit1 = (msb >> bitPosition) & 1;
+                int colorIndex = (colorBit1 << 1) | colorBit0;
+
+                if (colorIndex == 0) continue; // Cor 0 é transparente
+
+                return new PixelInfo(colorIndex, true, bgPriority, paletteReg);
+            }
+        }
+
+        return null;
+    }
+    
+    /**
+     * Transfere o buffer da scanline atual para o buffer de tela
+     */
+    private void transferScanlineToScreen() {
+        int baseIndex = ly * SCREEN_WIDTH;
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            if (baseIndex + x < screenBuffer.length) {
+                PixelInfo pixel = currentScanlineBuffer[x];
+                screenBuffer[baseIndex + x] = getColorFromPalette(pixel.colorIndex, pixel.paletteRegister);
+            }
+        }
     }
     
     /**
      * Conta sprites visíveis na scanline atual (implementação corrigida)
+     * No hardware DMG real, apenas os primeiros 10 sprites que aparecem na scanline
+     * são selecionados, independentemente da posição X
      */
     private int countSpritesOnScanline() {
         if (!isSpriteDisplayEnabled()) return 0;
@@ -310,7 +564,8 @@ public class PPU {
         int spriteHeight = isSpriteSize8x16() ? 16 : 8;
         int count = 0;
         
-        // Verificar todos os 40 sprites, mas contar apenas os primeiros 10 visíveis
+        // OAM Scan: Verificar os 40 sprites em ordem, selecionar os primeiros 10 que aparecem na scanline
+        // Este é o comportamento real do DMG - os primeiros 10 encontrados, não necessariamente os de menor X
         for (int i = 0; i < 40 && count < 10; i++) {
             int spriteY = (oam[i * 4] & 0xFF) - 16;
             
@@ -569,6 +824,7 @@ public class PPU {
         List<VisibleSprite> visibleSprites = new ArrayList<>();
 
         // 1. OAM Scan: Encontrar até 10 sprites visíveis na scanline atual
+        // No DMG real, os primeiros 10 sprites encontrados são selecionados (ordem da OAM)
         for (int i = 0; i < 40; i++) {
             int oamAddr = i * 4; // Cada sprite tem 4 bytes na OAM
 
@@ -581,26 +837,29 @@ public class PPU {
             if (ly >= spriteY && ly < (spriteY + spriteHeight)) {
                 visibleSprites.add(new VisibleSprite(i, spriteX, spriteY, tileIndex, attributes));
                 
-                // Limite de 10 sprites por scanline
+                // Limite de 10 sprites por scanline (comportamento do hardware DMG)
                 if (visibleSprites.size() >= 10) break;
             }
         }
 
-        // 2. Ordenar sprites por prioridade de desenho
-        // Em DMG: menor X primeiro, empates quebrados por índice OAM menor
+        // 2. Ordenar sprites por prioridade de renderização (importante para ordem de desenho)
+        // Prioridade de renderização (da menor para maior prioridade visual):
+        // - Sprites com X maior são desenhados primeiro (menor prioridade)
+        // - Se X é igual, índice OAM maior é desenhado primeiro
+        // Resultado: sprites com menor X aparecem na frente, e com X igual, menor índice aparece na frente
         visibleSprites.sort((a, b) -> {
+            // Ordenar por X decrescente (X maior = menor prioridade visual = desenhar primeiro)
             if (a.spriteX != b.spriteX) {
-                return Integer.compare(a.spriteX, b.spriteX);
+                return Integer.compare(b.spriteX, a.spriteX);
             }
-            // Se X é igual, prioridade é pelo índice na OAM (menor índice primeiro)
-            return Integer.compare(a.spriteIndex, b.spriteIndex);
+            // Se X igual, ordenar por índice OAM decrescente (índice maior = desenhar primeiro)
+            return Integer.compare(b.spriteIndex, a.spriteIndex);
         });
 
-        // 3. Renderizar sprites em ordem REVERSA de prioridade
-        // Sprites com menor prioridade são desenhados primeiro, depois os de maior prioridade sobrescrevem
-        for (int idx = visibleSprites.size() - 1; idx >= 0; idx--) {
-            VisibleSprite sprite = visibleSprites.get(idx);
-            
+        // 3. Renderizar sprites na ordem de prioridade
+        // Sprites com menor prioridade visual são desenhados primeiro,
+        // depois sprites com maior prioridade sobrescrevem
+        for (VisibleSprite sprite : visibleSprites) {
             boolean yFlip = (sprite.attributes & 0x40) != 0;
             boolean xFlip = (sprite.attributes & 0x20) != 0;
             boolean bgPriority = (sprite.attributes & 0x80) != 0; // 0: Sprite sobre BG/Win, 1: Sprite atrás de BG/Win cores 1-3
@@ -645,23 +904,23 @@ public class PPU {
 
                     if (colorIndex == 0) continue; // Cor 0 é transparente para sprites
 
-                    // Aplicar lógica de prioridade correta baseada no Pandocs
+                    // Aplicar lógica de prioridade sprite vs BG/Window
+                    // Baseada no Pandocs e comportamento do hardware DMG
                     PixelInfo currentPixel = scanlinePixelInfo[screenX];
-                    
-                    // Verificar se deve desenhar o sprite
                     boolean shouldDraw = true;
                     
-                    // Se bgPriority está ativo, sprite só aparece se o pixel do BG/Window for cor 0
-                    if (bgPriority && isBgWindowDisplayEnabled() && currentPixel.colorIndex != 0) {
-                        shouldDraw = false; // BG/Window tem prioridade, sprite é ocultado
-                    }
-                    
-                    // Se já existe um sprite neste pixel, não sobrescrever (primeira sprite tem prioridade)
+                    // Se já existe um sprite desenhado neste pixel, não sobrescrever
+                    // (sprite com maior prioridade visual já foi desenhado)
                     if (currentPixel.fromSprite) {
                         shouldDraw = false;
                     }
                     
-                    // Se chegou aqui e pode desenhar, desenhar o sprite
+                    // Se bgPriority (bit 7) está ativo e BG/Window display está ativo
+                    // Sprite só aparece se o pixel do BG/Window for cor 0 (branco/transparente)
+                    if (!currentPixel.fromSprite && bgPriority && isBgWindowDisplayEnabled() && currentPixel.colorIndex != 0) {
+                        shouldDraw = false; // BG/Window tem prioridade sobre este sprite
+                    }
+                    
                     if (shouldDraw) {
                         scanlinePixelInfo[screenX] = new PixelInfo(colorIndex, true, bgPriority, paletteReg);
                     }
@@ -763,10 +1022,15 @@ public class PPU {
     public void setWx(int value) { this.wx = value & 0xFF; }
 
     // --- Acesso à VRAM e OAM pela MMU com restrições implementadas ---
+    /**
+     * Lê um byte da VRAM com restrições de timing
+     * VRAM é inacessível durante o modo 3 (Drawing) quando o LCD está ligado
+     * @return 0xFF se inacessível, valor da VRAM caso contrário
+     */
     public byte readVRAM(int address) {
         // Restrição de acesso: VRAM não pode ser acessada durante Drawing (modo 3) quando LCD está ligado
         if (isLcdEnabled() && ppuMode == 3) {
-            return (byte) 0xFF; // VRAM inacessível durante Drawing
+            return (byte) 0xFF; // VRAM inacessível durante Drawing - retorna 0xFF conforme hardware real
         }
         if (address >= 0 && address < vram.length) {
             return vram[address];
@@ -774,20 +1038,29 @@ public class PPU {
         return (byte) 0xFF; // Fora dos limites
     }
 
+    /**
+     * Escreve um byte na VRAM com restrições de timing
+     * VRAM é inacessível durante o modo 3 (Drawing) quando o LCD está ligado
+     */
     public void writeVRAM(int address, byte value) {
         // Restrição de acesso: VRAM não pode ser escrita durante Drawing (modo 3) quando LCD está ligado
         if (isLcdEnabled() && ppuMode == 3) {
-            return; // VRAM inacessível durante Drawing
+            return; // VRAM inacessível durante Drawing - escrita é ignorada
         }
         if (address >= 0 && address < vram.length) {
             vram[address] = value;
         }
     }
 
+    /**
+     * Lê um byte da OAM com restrições de timing
+     * OAM é inacessível durante os modos 2 (OAM Scan) e 3 (Drawing) quando o LCD está ligado
+     * @return 0xFF se inacessível, valor da OAM caso contrário
+     */
     public byte readOAM(int address) {
         // Restrição de acesso: OAM não pode ser acessada durante OAM Scan (modo 2) ou Drawing (modo 3) quando LCD está ligado
         if (isLcdEnabled() && (ppuMode == 2 || ppuMode == 3)) {
-            return (byte) 0xFF; // OAM inacessível durante OAM Scan e Drawing
+            return (byte) 0xFF; // OAM inacessível durante OAM Scan e Drawing - retorna 0xFF conforme hardware real
         }
         if (address >= 0 && address < oam.length) {
             return oam[address];
@@ -795,10 +1068,14 @@ public class PPU {
         return (byte) 0xFF;
     }
 
+    /**
+     * Escreve um byte na OAM com restrições de timing
+     * OAM é inacessível durante os modos 2 (OAM Scan) e 3 (Drawing) quando o LCD está ligado
+     */
     public void writeOAM(int address, byte value) {
         // Restrição de acesso: OAM não pode ser escrita durante OAM Scan (modo 2) ou Drawing (modo 3) quando LCD está ligado
         if (isLcdEnabled() && (ppuMode == 2 || ppuMode == 3)) {
-            return; // OAM inacessível durante OAM Scan e Drawing
+            return; // OAM inacessível durante OAM Scan e Drawing - escrita é ignorada
         }
         if (address >= 0 && address < oam.length) {
             oam[address] = value;
@@ -835,6 +1112,23 @@ public class PPU {
      */
     public int getPpuMode() {
         return ppuMode;
+    }
+    
+    /**
+     * Habilita ou desabilita renderização pixel-a-pixel (Pixel FIFO)
+     * Quando habilitado, permite efeitos mid-scanline mas pode ter impacto na performance
+     * @param enable true para habilitar, false para usar renderização por scanline
+     */
+    public void setPixelFifoEnabled(boolean enable) {
+        this.enablePixelFifo = enable;
+        System.out.println("Pixel FIFO " + (enable ? "habilitado" : "desabilitado"));
+    }
+    
+    /**
+     * Verifica se o Pixel FIFO está habilitado
+     */
+    public boolean isPixelFifoEnabled() {
+        return enablePixelFifo;
     }
 
     // Save/Load State

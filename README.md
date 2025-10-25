@@ -2,9 +2,12 @@
 
 Este projeto é um emulador do Game Boy clássico (DMG) desenvolvido em Java como Trabalho de Conclusão de Curso (TCC). O objetivo é simular o funcionamento do hardware original do Game Boy, permitindo a execução de jogos clássicos em um ambiente moderno.
 
+**Versão 2.0 - Precisão Melhorada** 🎮
+
 ## Sumário
 
 - [Descrição Geral](#descrição-geral)
+- [Novidades da Versão 2.0](#novidades-da-versão-20)
 - [Arquitetura do Hardware do Game Boy](#arquitetura-do-hardware-do-game-boy)
 - [Ciclo de Emulação](#ciclo-de-emulação)
 - [Controles](#controles)
@@ -18,12 +21,69 @@ Este projeto é um emulador do Game Boy clássico (DMG) desenvolvido em Java com
 O emulador implementa os principais componentes do Game Boy:
 
 - **CPU**: Processador Sharp LR35902 (baseado no Z80, 8 bits)
-- **PPU**: Unidade de processamento gráfico (Pixel Processing Unit)
+- **PPU**: Unidade de processamento gráfico (Pixel Processing Unit) com precisão ciclo-a-ciclo
 - **APU**: Unidade de processamento de áudio (Audio Processing Unit)
 - **MMU**: Unidade de gerenciamento de memória (Memory Management Unit)
-- **Cartridge**: Suporte a ROMs e RAM externa (incluindo MBC1 básico)
+- **Cartridge**: Suporte a ROMs e RAM externa (incluindo MBC1, MBC2, MBC3, MBC5)
 - **InputHandler**: Mapeamento de teclado para os botões do Game Boy
 - **Janela gráfica**: Exibição da tela e captura de entrada do usuário
+
+---
+
+## Novidades da Versão 2.0
+
+### 🎯 Precisão Melhorada da PPU
+
+#### 1. **Timing Ciclo-a-Ciclo**
+- Modo 2 (OAM Scan): 80 ciclos fixos
+- Modo 3 (Drawing): 172-289 ciclos variáveis baseado em:
+  - Número de sprites visíveis (+11 ciclos por sprite)
+  - Scroll horizontal SCX (+0 a 7 ciclos)
+  - Window ativa (+6 ciclos)
+- Modo 0 (H-Blank): resto até 456 ciclos
+- Modo 1 (V-Blank): 4560 ciclos (10 linhas)
+
+#### 2. **Pipeline Pixel-a-Pixel (Pixel FIFO)**
+- Sistema opcional de renderização pixel por pixel
+- Suporta efeitos mid-scanline:
+  - Mudanças de paleta durante scanline
+  - Alterações de scroll (SCX/SCY)
+  - Ativação/desativação da window
+- Habilitável via `ppu.setPixelFifoEnabled(true)`
+
+#### 3. **Restrições de Acesso VRAM/OAM**
+- **VRAM**: inacessível durante Modo 3 (Drawing)
+- **OAM**: inacessível durante Modo 2 (OAM Scan) e Modo 3 (Drawing)
+- Leituras bloqueadas retornam `0xFF` (comportamento do hardware real)
+- Escritas bloqueadas são ignoradas
+
+#### 4. **Precisão de Sprites**
+- Limite correto de 10 sprites por linha
+- Seleção baseada em ordem da OAM (primeiros 10 encontrados)
+- Prioridade sprite vs sprite:
+  - Menor X = maior prioridade visual
+  - X igual: menor índice OAM tem prioridade
+- Prioridade BG/Window vs Sprite:
+  - Cor 0 do sprite sempre transparente
+  - Bit 7 do sprite controla prioridade com BG
+  - Respeita LCDC.0 (BG Display Enable)
+
+### 📊 Modos de Renderização
+
+**Modo Tradicional (Padrão - Recomendado)**
+- Renderização por scanline completa
+- Melhor performance
+- Compatível com 95%+ dos jogos
+
+**Modo Pixel FIFO (Opcional)**
+- Renderização pixel a pixel
+- Efeitos mid-scanline
+- Máxima precisão
+- Use apenas se necessário
+
+### 📚 Documentação Adicional
+- [MELHORIAS_PPU_CPU.md](MELHORIAS_PPU_CPU.md) - Detalhes técnicos das melhorias
+- [PPUPrecisionExample.java](src/com/meutcc/gbemulator/PPUPrecisionExample.java) - Exemplos de uso
 
 ---
 
