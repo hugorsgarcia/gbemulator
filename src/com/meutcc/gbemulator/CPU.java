@@ -23,7 +23,6 @@ public class CPU {
 
     public CPU(MMU mmu) {
         this.mmu = mmu;
-        mmu.setCpu(this);
         reset();
     }
 
@@ -39,15 +38,6 @@ public class CPU {
         halted = false;
         haltBugTriggered = false;
         System.out.println("CPU reset. PC=" + String.format("0x%04X", pc));
-    }
-
-    /**
-     * @deprecated Este método não é mais necessário. O DIV é agora gerenciado 
-     * completamente pela MMU com timing preciso.
-     */
-    @Deprecated
-    public void resetDivAccumulator() {
-        // Método mantido para compatibilidade, mas não faz nada
     }
     
     /**

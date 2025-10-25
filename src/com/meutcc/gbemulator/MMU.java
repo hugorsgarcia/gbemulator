@@ -8,7 +8,6 @@ public class MMU {
     private Cartridge cartridge;
     private final PPU ppu;
     private final APU apu;
-    private CPU cpu; // Referência à CPU para interações (ex: reset do DIV)
 
     // Estado do Boot ROM
     private boolean bootRomEnabled = false; // Começa desabilitado se não houver arquivo de boot rom
@@ -65,11 +64,6 @@ public class MMU {
         this.ppu = ppu;
         this.apu = apu;
         Arrays.fill(memory, (byte) 0x00);
-    }
-
-    // Setter para a referência da CPU
-    public void setCpu(CPU cpu) {
-        this.cpu = cpu;
     }
 
     public void reset() {
@@ -211,16 +205,6 @@ public class MMU {
                 this.dmaMemoryBlocked = false;
             }
         }
-    }
-
-    /**
-     * @deprecated Este método não é mais usado. O DIV é agora atualizado automaticamente 
-     * pelo updateTimers() com timing preciso de ciclo.
-     */
-    @Deprecated
-    public void incrementDivRegister() {
-        // Método mantido para compatibilidade, mas não faz nada
-        // O DIV é agora atualizado automaticamente em updateTimersSingleCycle()
     }
 
     public void loadCartridge(Cartridge cart) {
@@ -366,10 +350,6 @@ public class MMU {
                 // Resetar DIV para 0
                 divCounter = 0;
                 memory[REG_DIV] = 0;
-                
-                if (cpu != null) {
-                    cpu.resetDivAccumulator();
-                }
                 break;
             case REG_JOYP:
                 memory[REG_JOYP] = (byte) ((memory[REG_JOYP] & 0xCF) | (value & 0x30));
