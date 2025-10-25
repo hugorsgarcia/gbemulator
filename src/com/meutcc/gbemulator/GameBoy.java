@@ -16,6 +16,9 @@ public class GameBoy {
         this.apu = new APU();
         this.mmu = new MMU(cartridge, ppu, apu);
         this.cpu = new CPU(mmu); // CPU agora passa a referência da MMU
+        
+        // Set CPU reference in MMU for STOP mode wake-up
+        this.mmu.setCpu(cpu);
 
         this.ppu.setMmu(mmu);
         if (this.apu != null) {

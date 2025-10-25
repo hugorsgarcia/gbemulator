@@ -1,5 +1,66 @@
 package com.meutcc.gbemulator;
 
+/**
+ * Game Boy CPU (Sharp LR35902) - Cycle-Accurate Implementation
+ * 
+ * This CPU is a hybrid between Intel 8080 and Zilog Z80, running at 4.194304 MHz.
+ * 
+ * ========================================================================
+ * CYCLE-ACCURATE TIMING IMPLEMENTATION
+ * ========================================================================
+ * 
+ * T-CYCLES vs M-CYCLES:
+ * - 1 M-cycle (Machine cycle) = 4 T-cycles (Clock cycles)
+ * - All timings in this implementation use T-cycles
+ * - The Game Boy CPU clock runs at ~4.194 MHz (1 T-cycle ≈ 238 ns)
+ * 
+ * INSTRUCTION TIMING:
+ * - Every instruction has a precise cycle count
+ * - Conditional branches have different timings when taken vs not taken
+ * - Memory accesses contribute to cycle count
+ * - CB-prefixed instructions take additional cycles
+ * 
+ * HALT BUG:
+ * - When HALT is executed with IME=0 and pending interrupts (IE & IF != 0):
+ *   * CPU does NOT enter HALT state
+ *   * Next instruction after HALT is executed TWICE
+ *   * PC fails to increment after the byte following HALT
+ * - This is a hardware bug present in all Game Boy models
+ * 
+ * STOP INSTRUCTION:
+ * - Format: 0x10 0x00 (two bytes)
+ * - CPU stops until button press
+ * - On CGB, can switch CPU speed (not implemented here)
+ * - Different from HALT (which can wake on any interrupt)
+ * 
+ * INTERRUPT SYSTEM:
+ * - Interrupts checked BEFORE each instruction fetch
+ * - Priority: V-Blank > LCD STAT > Timer > Serial > Joypad
+ * - Servicing an interrupt takes 20 T-cycles (5 M-cycles)
+ * - EI (Enable Interrupts) has 1-instruction delay before taking effect
+ * - HALT wakes on pending interrupt even if IME=0 (but doesn't service it)
+ * 
+ * EI DELAY BEHAVIOR:
+ * - EI sets a flag that enables IME after the NEXT instruction completes
+ * - This allows patterns like "EI; RET" to work correctly
+ * - Critical for returning from interrupt handlers safely
+ * 
+ * INTERRUPT TIMING:
+ * - Interrupt flags (IF) are set by peripherals at specific times:
+ *   * V-Blank: Start of mode 1 (line 144)
+ *   * LCD STAT: Mode transitions, LYC=LY compare
+ *   * Timer: TIMA overflow (with 4-cycle delay)
+ *   * Serial: Transfer complete
+ *   * Joypad: Button press
+ * - CPU checks interrupts between instructions (not during)
+ * 
+ * ========================================================================
+ * REFERENCES:
+ * - Pan Docs: https://gbdev.io/pandocs/
+ * - TCAGBD: The Cycle-Accurate Game Boy Docs
+ * - GBDev: https://gbdev.gg8.se/wiki/articles/Main_Page
+ * ========================================================================
+ */
 public class CPU {
 
     private final MMU mmu;
@@ -20,6 +81,12 @@ public class CPU {
     private boolean debugUndocumentedOpcodes = false;
     
     private boolean haltBugTriggered = false;
+    
+    // EI (Enable Interrupt) delay: IME is enabled after the instruction following EI
+    private boolean eiExecuted = false;
+    
+    // STOP state tracking
+    private boolean stopped = false;
 
     public CPU(MMU mmu) {
         this.mmu = mmu;
@@ -37,6 +104,8 @@ public class CPU {
         ime = false;
         halted = false;
         haltBugTriggered = false;
+        eiExecuted = false;
+        stopped = false;
         System.out.println("CPU reset. PC=" + String.format("0x%04X", pc));
     }
     
@@ -49,15 +118,24 @@ public class CPU {
     }
     
     /**
-     * Implementa a lógica do HALT ou "HALT bug".
+     * Implementa a lógica do HALT e do "HALT Bug".
      * 
-     * Comportamento normal: IME=1 ou nenhuma interrupção pendente
-     * - CPU entra em estado HALT normal
+     * COMPORTAMENTO NORMAL DO HALT:
+     * - IME=1: CPU entra em HALT e acorda quando uma interrupção habilitada é solicitada
+     * - IME=0 e nenhuma interrupção pendente: CPU entra em HALT e acorda quando IE & IF != 0
      * 
-     * HALT Bug: IME=0 mas há interrupção pendente (IF & IE != 0)
-     * - CPU não entra em HALT
-     * - Próxima instrução é executada mas PC não é incrementado
-     * - Resultado: próxima instrução é executada duas vezes
+     * HALT BUG (Hardware Bug):
+     * - Ocorre quando: IME=0 E há interrupção pendente (IE & IF & 0x1F != 0)
+     * - Efeito: CPU NÃO entra em HALT, mas o PC falha em incrementar após o próximo fetch
+     * - Resultado: A próxima instrução após HALT é executada DUAS vezes
+     * - Este é um bug real do hardware presente em todos os modelos de Game Boy
+     * 
+     * IMPLEMENTAÇÃO:
+     * - Detectamos a condição do HALT bug aqui
+     * - Setamos flag haltBugTriggered para que step() decremente PC antes da próxima execução
+     * - A instrução seguinte ao HALT será executada duas vezes, mas PC avançará apenas uma vez
+     * 
+     * Ciclos: HALT consome 4 T-cycles (1 M-cycle)
      */
     private void executeHalt() {
         byte IE = (byte) mmu.readByte(0xFFFF);
@@ -81,11 +159,29 @@ public class CPU {
         cycles = 0;
         int executedCyclesThisStep = 0;
 
-        handleInterrupts(); // Processa interrupções antes de executar a próxima instrução.
+        // Handle interrupts BEFORE fetching next instruction
+        // This ensures interrupts are checked at the correct timing
+        // If an interrupt is serviced, handleInterrupts() sets cycles to 20
+        handleInterrupts();
+        
+        // If an interrupt was serviced, return those cycles
+        if (cycles > 0) {
+            return cycles;
+        }
 
         if (halted) {
             executedCyclesThisStep = 4; // HALT consome ciclos como um NOP
+        } else if (stopped) {
+            // STOP mode: CPU is stopped, just consume cycles
+            executedCyclesThisStep = 4;
         } else {
+            // Process EI delay: If EI was executed in the previous instruction,
+            // enable IME now (after one instruction delay)
+            if (eiExecuted) {
+                ime = true;
+                eiExecuted = false;
+            }
+            
             int opcode = fetch();
             
             // Verificar se o HALT bug foi ativado na execução anterior
@@ -158,9 +254,12 @@ public class CPU {
 
             // STOP (0x10 0x00)
             case 0x10:
-                // TODO: Implementar lógica de STOP (e CGB speed switch)
+                // STOP instruction: CPU stops until button press
+                // On CGB, this can also switch speeds
+                // Format: 0x10 0x00 (two bytes)
                 fetch(); // Consome o byte 0x00 que acompanha STOP
-                halted = true; // Comportamento simplificado
+                stopped = true;
+                halted = false; // STOP is different from HALT
                 cycles = 4;
                 break;
 
@@ -197,7 +296,36 @@ public class CPU {
             // RRA
             case 0x1F: rra(); cycles = 4; break;
 
-            // JR NZ,r8
+            // ========================================================================
+            // CONDITIONAL BRANCHES - CYCLE-ACCURATE TIMING
+            // ========================================================================
+            // Conditional jumps/calls/returns have different cycle counts based on
+            // whether the condition is met (branch taken) or not (branch not taken).
+            //
+            // JR cc,r8 (relative jump):
+            //   - Taken: 12 cycles (3 M-cycles) - fetch opcode, fetch offset, perform jump
+            //   - Not taken: 8 cycles (2 M-cycles) - fetch opcode, fetch offset
+            //
+            // JP cc,a16 (absolute jump):
+            //   - Taken: 16 cycles (4 M-cycles) - fetch opcode, fetch addr low, fetch addr high, perform jump
+            //   - Not taken: 12 cycles (3 M-cycles) - fetch opcode, fetch addr low, fetch addr high
+            //
+            // CALL cc,a16:
+            //   - Taken: 24 cycles (6 M-cycles) - fetch opcode, fetch addr, push PC high, push PC low, jump
+            //   - Not taken: 12 cycles (3 M-cycles) - fetch opcode, fetch addr low, fetch addr high
+            //
+            // RET cc:
+            //   - Taken: 20 cycles (5 M-cycles) - fetch opcode, internal delay, pop PC low, pop PC high, jump
+            //   - Not taken: 8 cycles (2 M-cycles) - fetch opcode, check condition
+            //
+            // This timing is critical for:
+            // - Demo scene effects that rely on precise timing
+            // - Games using timing loops
+            // - Sound synchronization
+            // ========================================================================
+            
+            // JR NZ,r8 - Jump relative if Zero flag is not set
+            // JR NZ,r8 - Jump relative if Zero flag is not set
             case 0x20: if (!getZeroFlag()) { jr_unconditional(); cycles = 12; } else { fetch(); cycles = 8; } break;
             // LD HL,d16
             case 0x21: setHL(fetchWord()); cycles = 12; break;
@@ -213,7 +341,7 @@ public class CPU {
             case 0x26: h = fetch(); cycles = 8; break;
             // DAA
             case 0x27: daa(); cycles = 4; break;
-            // JR Z,r8
+            // JR Z,r8 - Jump relative if Zero flag is set
             case 0x28: if (getZeroFlag()) { jr_unconditional(); cycles = 12; } else { fetch(); cycles = 8; } break;
             // ADD HL,HL
             case 0x29: addHL(getHL()); cycles = 8; break;
@@ -230,7 +358,7 @@ public class CPU {
             // CPL
             case 0x2F: cpl(); cycles = 4; break;
 
-            // JR NC,r8
+            // JR NC,r8 - Jump relative if Carry flag is not set
             case 0x30: if (!getCarryFlag()) { jr_unconditional(); cycles = 12; } else { fetch(); cycles = 8; } break;
             // LD SP,d16
             case 0x31: sp = fetchWord(); cycles = 12; break;
@@ -246,7 +374,7 @@ public class CPU {
             case 0x36: mmu.writeByte(getHL(), fetch()); cycles = 12; break;
             // SCF
             case 0x37: scf(); cycles = 4; break;
-            // JR C,r8
+            // JR C,r8 - Jump relative if Carry flag is set
             case 0x38: if (getCarryFlag()) { jr_unconditional(); cycles = 12; } else { fetch(); cycles = 8; } break;
             // ADD HL,SP
             case 0x39: addHL(sp); cycles = 8; break;
@@ -411,15 +539,20 @@ public class CPU {
             case 0xBE: cpA(mmu.readByte(getHL())); cycles = 8; break;
             case 0xBF: cpA(a); cycles = 4; break;
 
-            // RET NZ
+            // ========================================================================
+            // CONDITIONAL JP, CALL, RET - CYCLE-ACCURATE TIMING
+            // ========================================================================
+            
+            // RET NZ - Return if Zero flag is not set (taken: 20, not taken: 8)
+            // RET NZ - Return if Zero flag is not set (taken: 20, not taken: 8)
             case 0xC0: if (!getZeroFlag()) { ret(); cycles = 20; } else { cycles = 8; } break;
             // POP BC
             case 0xC1: setBC(popWord()); cycles = 12; break;
-            // JP NZ,a16
+            // JP NZ,a16 - Jump absolute if Zero flag is not set (taken: 16, not taken: 12)
             case 0xC2: if (!getZeroFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
             // JP a16
             case 0xC3: jp_unconditional(); cycles = 16; break;
-            // CALL NZ,a16
+            // CALL NZ,a16 - Call if Zero flag is not set (taken: 24, not taken: 12)
             case 0xC4: if (!getZeroFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
             // PUSH BC
             case 0xC5: pushWord(getBC()); cycles = 16; break;
@@ -428,15 +561,15 @@ public class CPU {
             // RST 00H
             case 0xC7: rst(0x00); cycles = 16; break;
 
-            // RET Z
+            // RET Z - Return if Zero flag is set (taken: 20, not taken: 8)
             case 0xC8: if (getZeroFlag()) { ret(); cycles = 20; } else { cycles = 8; } break;
             // RET
             case 0xC9: ret(); cycles = 16; break;
-            // JP Z,a16
+            // JP Z,a16 - Jump absolute if Zero flag is set (taken: 16, not taken: 12)
             case 0xCA: if (getZeroFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
             // CB prefix
             case 0xCB: decodeCB(); break;
-            // CALL Z,a16
+            // CALL Z,a16 - Call if Zero flag is set (taken: 24, not taken: 12)
             case 0xCC: if (getZeroFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
             // CALL a16
             case 0xCD: call_unconditional(); cycles = 24; break;
@@ -445,11 +578,11 @@ public class CPU {
             // RST 08H
             case 0xCF: rst(0x08); cycles = 16; break;
 
-            // RET NC
+            // RET NC - Return if Carry flag is not set (taken: 20, not taken: 8)
             case 0xD0: if (!getCarryFlag()) { ret(); cycles = 20; } else { cycles = 8; } break;
             // POP DE
             case 0xD1: setDE(popWord()); cycles = 12; break;
-            // JP NC,a16
+            // JP NC,a16 - Jump absolute if Carry flag is not set (taken: 16, not taken: 12)
             case 0xD2: if (!getCarryFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
             case 0xD3:
                 if (debugUndocumentedOpcodes) {
@@ -458,7 +591,7 @@ public class CPU {
                 fetch(); // Consome o byte imediato, mas não faz nada com ele
                 cycles = 8; 
                 break;
-            // CALL NC,a16
+            // CALL NC,a16 - Call if Carry flag is not set (taken: 24, not taken: 12)
             case 0xD4: if (!getCarryFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
             // PUSH DE
             case 0xD5: pushWord(getDE()); cycles = 16; break;
@@ -467,11 +600,11 @@ public class CPU {
             // RST 10H
             case 0xD7: rst(0x10); cycles = 16; break;
 
-            // RET C
+            // RET C - Return if Carry flag is set (taken: 20, not taken: 8)
             case 0xD8: if (getCarryFlag()) { ret(); cycles = 20; } else { cycles = 8; } break;
             // RETI
             case 0xD9: ret(); ime = true; cycles = 16; break;
-            // JP C,a16
+            // JP C,a16 - Jump absolute if Carry flag is set (taken: 16, not taken: 12)
             case 0xDA: if (getCarryFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
 
             case 0xDB:
@@ -481,7 +614,7 @@ public class CPU {
                 fetch(); // Consome o byte imediato, mas não faz nada com ele
                 cycles = 8; 
                 break;
-            // CALL C,a16
+            // CALL C,a16 - Call if Carry flag is set (taken: 24, not taken: 12)
             case 0xDC: if (getCarryFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
 
             case 0xDD:
@@ -562,8 +695,13 @@ public class CPU {
             case 0xF9: sp = getHL(); cycles = 8; break;
             // LD A,(a16)
             case 0xFA: a = mmu.readByte(fetchWord()); cycles = 16; break;
-            // EI
-            case 0xFB: ime = true; cycles = 4; break;
+            // EI - Enable Interrupts (with 1 instruction delay)
+            case 0xFB: 
+                // EI has a 1-instruction delay before IME is actually enabled
+                // This allows for patterns like: EI; RET to work correctly
+                eiExecuted = true; 
+                cycles = 4; 
+                break;
             case 0xFC:
                 fetchWord(); 
                 cycles = 12; 
@@ -1119,7 +1257,46 @@ public class CPU {
     }
 
 
+    /**
+     * Handle interrupt processing with cycle-accurate timing.
+     * 
+     * INTERRUPT TIMING AND BEHAVIOR:
+     * 
+     * 1. WHEN ARE INTERRUPTS CHECKED?
+     *    - Interrupts are checked BEFORE fetching the next instruction
+     *    - NOT checked during instruction execution (instructions are atomic)
+     *    - This is why handleInterrupts() is called at the start of step()
+     * 
+     * 2. INTERRUPT PRIORITY (highest to lowest):
+     *    - V-Blank (bit 0, 0x40) - Triggered at start of VBlank (line 144)
+     *    - LCD STAT (bit 1, 0x48) - Triggered by PPU mode changes
+     *    - Timer (bit 2, 0x50) - Triggered by TIMA overflow
+     *    - Serial (bit 3, 0x58) - Triggered by serial transfer complete
+     *    - Joypad (bit 4, 0x60) - Triggered by button press
+     * 
+     * 3. HALT WAKE-UP BEHAVIOR:
+     *    - If CPU is HALTed, any enabled interrupt wakes it (even if IME=0)
+     *    - If IME=0, CPU wakes but doesn't service the interrupt
+     *    - If IME=1, CPU wakes AND services the interrupt
+     * 
+     * 4. INTERRUPT SERVICING (when IME=1):
+     *    - IME is disabled (to prevent nested interrupts)
+     *    - IF flag for this interrupt is cleared
+     *    - PC is pushed onto stack (2 M-cycles)
+     *    - PC is set to interrupt vector (1 M-cycle)
+     *    - Total: 20 T-cycles (5 M-cycles)
+     * 
+     * 5. EI DELAY:
+     *    - If an interrupt occurs during the 1-instruction delay after EI,
+     *      the eiExecuted flag is cancelled to prevent IME being re-enabled
+     * 
+     * CYCLE TIMING:
+     * - If interrupt is serviced: cycles = 20 (returned by step())
+     * - If no interrupt: cycles = 0 (normal instruction will execute)
+     */
     public void handleInterrupts() {
+        // Check if any interrupt should be processed
+        // IME must be enabled OR CPU must be halted for wake-up
         if (!ime && !halted) {
             return;
         }
@@ -1133,35 +1310,53 @@ public class CPU {
             return;
         }
 
+        // Wake from HALT even if IME is disabled
         halted = false;
 
+        // If IME is disabled, we wake from HALT but don't service the interrupt
         if (!ime) {
             return;
         }
 
+        // Disable IME before servicing interrupt
         ime = false;
+        
+        // Cancel any pending EI execution since we're handling an interrupt
+        eiExecuted = false;
 
-        // Consome 20 ciclos para o despacho da interrupção
-        cycles += 20;
-
+        // Service the highest priority interrupt (lowest bit set)
+        // Priority order: V-Blank > LCD STAT > Timer > Serial > Joypad
         if ((requestedAndEnabled & 0x01) != 0) { 
             mmu.writeByte(0xFF0F, IF & ~0x01);
             rst(0x0040);
+            cycles = 20; // Interrupt dispatch takes 5 M-cycles (20 T-cycles)
         } else if ((requestedAndEnabled & 0x02) != 0) { // LCD STAT (Bit 1)
             mmu.writeByte(0xFF0F, IF & ~0x02);
             rst(0x0048);
+            cycles = 20;
         } else if ((requestedAndEnabled & 0x04) != 0) { // Timer (Bit 2)
             mmu.writeByte(0xFF0F, IF & ~0x04);
             rst(0x0050);
+            cycles = 20;
         } else if ((requestedAndEnabled & 0x08) != 0) { // Serial (Bit 3)
             mmu.writeByte(0xFF0F, IF & ~0x08);
             rst(0x0058);
+            cycles = 20;
         } else if ((requestedAndEnabled & 0x10) != 0) { 
             mmu.writeByte(0xFF0F, IF & ~0x10);
             rst(0x0060);
-        } else {
-            
-            ime = true;
+            cycles = 20;
+        }
+    }
+    
+    /**
+     * Wake CPU from STOP mode.
+     * Called when a button is pressed while in STOP mode.
+     */
+    public void wakeFromStop() {
+        if (stopped) {
+            stopped = false;
+            System.out.println("CPU woken from STOP mode");
         }
     }
 

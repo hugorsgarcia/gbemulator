@@ -8,6 +8,7 @@ public class MMU {
     private Cartridge cartridge;
     private final PPU ppu;
     private final APU apu;
+    private CPU cpu; // Reference to CPU for waking from STOP
 
     // Estado do Boot ROM
     private boolean bootRomEnabled = false; // Começa desabilitado se não houver arquivo de boot rom
@@ -100,7 +101,16 @@ public class MMU {
         this.cartridge = cartridge;
         this.ppu = ppu;
         this.apu = apu;
+        this.cpu = null; // Will be set later
         Arrays.fill(memory, (byte) 0x00);
+    }
+    
+    /**
+     * Set the CPU reference for waking from STOP mode.
+     * Must be called after CPU is created.
+     */
+    public void setCpu(CPU cpu) {
+        this.cpu = cpu;
     }
 
     public void reset() {
@@ -574,6 +584,11 @@ public class MMU {
     public void buttonPressed(Button button) {
         joypadState &= (byte) ~(1 << button.bit);
         memory[REG_IF] |= 0x10; // Solicita interrupção do Joypad
+        
+        // Wake CPU from STOP mode if it's stopped
+        if (cpu != null) {
+            cpu.wakeFromStop();
+        }
     }
 
     public void buttonReleased(Button button) {
