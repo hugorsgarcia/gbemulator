@@ -2,6 +2,56 @@ package com.meutcc.gbemulator;
 
 import java.util.*;
 
+/**
+ * PPU (Picture Processing Unit) - Unidade de Processamento de Imagem do Game Boy
+ * 
+ * Implementação precisa do PPU do Game Boy DMG com:
+ * - Timing ciclo-a-ciclo para compatibilidade máxima
+ * - Interrupções STAT precisas com edge detection
+ * - Suporte ao STAT write bug (comportamento do hardware)
+ * - Comparação LYC=LY em ciclos específicos
+ * - Bug da linha 153→0 (LY=153 dura apenas 4 ciclos)
+ * - Renderização pixel-a-pixel opcional (FIFO)
+ * - Restrições de acesso VRAM/OAM durante modos específicos
+ * 
+ * MELHORIAS DE PRECISÃO (2025-10-25):
+ * =====================================
+ * 
+ * 1. TIMING PRECISO DE LYC=LY:
+ *    - Comparação LYC=LY ocorre no ciclo 4 do modo 2 (OAM Scan)
+ *    - Comparação especial no ciclo 4 da linha 153 (transição 153→0)
+ *    - Flag LYC=LY (STAT bit 2) atualizada imediatamente
+ *    - Edge detection para prevenir interrupções duplicadas
+ * 
+ * 2. STAT WRITE BUG:
+ *    - Escrever no STAT pode disparar interrupções espúrias
+ *    - Ocorre quando: LCD ligado, não V-Blank, linha STAT estava baixa
+ *    - Emula glitch do hardware que causa borda de subida artificial
+ *    - Importante para compatibilidade com jogos que usam/sofrem com este bug
+ * 
+ * 3. BUG DA LINHA 153:
+ *    - LY=153 dura apenas 4 T-cycles (em vez de 456)
+ *    - No ciclo 4, LY muda de 153 para 0
+ *    - Pode causar comportamento inesperado se LYC = 153 ou 0
+ *    - Necessário para passar em test ROMs avançados
+ * 
+ * 4. INTERRUPÇÕES STAT NO CICLO EXATO:
+ *    - Verificação ciclo-a-ciclo em updateSingleCycle()
+ *    - Edge detection (0→1) na linha STAT
+ *    - Transições de modo disparam interrupções imediatamente
+ *    - Linha STAT = OR lógica de todas as condições habilitadas
+ * 
+ * VARIÁVEIS DE ESTADO ADICIONADAS:
+ * - previousLycEqualsLy: Estado anterior da comparação (edge detection)
+ * - lycComparisonThisCycle: Flag para forçar comparação em ciclos específicos
+ * 
+ * Referências:
+ * - Pan Docs: https://gbdev.io/pandocs/STAT.html
+ * - TCAGBD: Documentação de timing ciclo-a-ciclo
+ * - mooneye-gb: Test ROMs para validação de timing
+ * 
+ * @see STAT_LYC_TIMING.md para documentação detalhada
+ */
 public class PPU {
     // Classe interna para representar um pixel com índice de cor e informações de prioridade
     private static class PixelInfo {
@@ -92,6 +142,10 @@ public class PPU {
     private int mode3Duration; // Duração calculada do modo 3 para scanline atual
     private int windowLineCounter; // Contador interno de linha da Window (incrementado quando window é renderizada)
     
+    // Variáveis para timing preciso de LYC=LY
+    private boolean previousLycEqualsLy; // Estado anterior da comparação LYC=LY (para edge detection)
+    private boolean lycComparisonThisCycle; // Flag para indicar que a comparação LYC=LY deve ocorrer neste ciclo
+    
     // Pixel FIFO para renderização pixel-a-pixel (para efeitos mid-scanline)
     private int pixelX; // Posição X atual do pixel sendo renderizado (0-159)
     private boolean enablePixelFifo; // Habilita renderização pixel-a-pixel para efeitos mid-scanline
@@ -131,6 +185,8 @@ public class PPU {
         statInterruptLine = false;
         mode3Duration = MODE_3_BASE_CYCLES;
         windowLineCounter = 0; // Reset do contador de linha da Window
+        previousLycEqualsLy = false; // Reset do estado anterior de LYC=LY
+        lycComparisonThisCycle = false; // Reset da flag de comparação
         
         // Inicializar pixel FIFO
         pixelX = 0;
@@ -192,6 +248,7 @@ public class PPU {
         cyclesCounter = 0;
         scanlineCycles = 0;
         statInterruptLine = false;
+        previousLycEqualsLy = false;
         
         if (mmu != null) {
             mmu.writeByte(MMU.REG_LY, ly);
@@ -203,10 +260,16 @@ public class PPU {
      * Modo 2: OAM Scan (80 ciclos)
      */
     private void updateOamScanMode() {
+        // A comparação LYC=LY acontece no ciclo 4 do modo 2
+        if (cyclesCounter == 4) {
+            lycComparisonThisCycle = true;
+        }
+        
         if (cyclesCounter >= MODE_2_CYCLES) {
             cyclesCounter = 0;
             pixelX = 0; // Reset do pixel X para nova scanline
             ppuMode = 3;
+            lycComparisonThisCycle = false;
             
             // Calcular duração do modo 3 baseado no conteúdo da scanline
             calculateMode3Duration();
@@ -260,6 +323,10 @@ public class PPU {
             cyclesCounter = 0;
             ly++;
             
+            // A comparação LYC=LY acontece no ciclo 4 da próxima scanline (modo 2)
+            // Então não fazemos a comparação aqui, apenas atualizamos LY
+            lycComparisonThisCycle = false;
+            
             if (mmu != null) {
                 mmu.writeByte(MMU.REG_LY, ly);
             }
@@ -272,7 +339,7 @@ public class PPU {
                 // Solicitar interrupção V-Blank
                 requestVBlankInterrupt();
             } else {
-                // Próxima scanline
+                // Próxima scanline - modo 2 (OAM Scan)
                 ppuMode = 2;
             }
             
@@ -284,23 +351,46 @@ public class PPU {
      * Modo 1: V-Blank (10 linhas × 456 ciclos)
      */
     private void updateVBlankMode() {
-        if (scanlineCycles >= SCANLINE_CYCLES) {
-            scanlineCycles = 0;
-            cyclesCounter = 0;
-            ly++;
+        // Bug da linha 153: LY=153 dura apenas 4 ciclos, depois vai para 0
+        if (ly == 153 && scanlineCycles == 4) {
+            // Transição especial da linha 153 para 0
+            ly = 0;
+            lycComparisonThisCycle = true; // Comparar LYC=LY neste ciclo especial
             
             if (mmu != null) {
                 mmu.writeByte(MMU.REG_LY, ly);
             }
+        }
+        
+        if (scanlineCycles >= SCANLINE_CYCLES) {
+            scanlineCycles = 0;
+            cyclesCounter = 0;
             
-            if (ly >= TOTAL_LINES) {
-                // Fim do V-Blank, reiniciar frame
-                ly = 0;
-                ppuMode = 2;
-                windowLineCounter = 0; // Reset do contador de linha da Window no início do frame
+            // Se não estamos na linha 153 (que tem tratamento especial acima)
+            if (ly != 0) {
+                ly++;
+                lycComparisonThisCycle = false;
+                
                 if (mmu != null) {
                     mmu.writeByte(MMU.REG_LY, ly);
                 }
+            }
+            
+            if (ly >= TOTAL_LINES) {
+                // Fim do V-Blank, reiniciar frame
+                // Este caso não deve acontecer devido ao tratamento da linha 153
+                ly = 0;
+                ppuMode = 2;
+                windowLineCounter = 0; // Reset do contador de linha da Window no início do frame
+                lycComparisonThisCycle = false;
+                
+                if (mmu != null) {
+                    mmu.writeByte(MMU.REG_LY, ly);
+                }
+            } else if (ly == 0) {
+                // Transição de V-Blank para nova frame
+                ppuMode = 2;
+                windowLineCounter = 0;
             }
             
             updateStatRegister();
@@ -579,36 +669,63 @@ public class PPU {
     }
     
     /**
-     * Atualiza as interrupções STAT com detecção de borda
+     * Atualiza as interrupções STAT com detecção de borda precisa
+     * 
+     * Implementação baseada no comportamento do hardware DMG:
+     * - Interrupções STAT são disparadas na borda de subida (0→1) da linha STAT
+     * - A linha STAT é a OR lógica de todas as condições habilitadas
+     * - LYC=LY é comparada em ciclos específicos (ciclo 4 do modo 2, e ciclo 4 da linha 153→0)
+     * - Mudanças no STAT podem causar interrupções espúrias (STAT write bug)
      */
     private void updateStatInterrupts() {
         boolean newStatLine = false;
         
-        // Verificar condições de interrupção STAT
-        if ((stat & 0x08) != 0 && ppuMode == 0) { // H-Blank interrupt
+        // Verificar condições de interrupção STAT baseadas no modo atual
+        // Mode 0 (H-Blank) interrupt
+        if ((stat & 0x08) != 0 && ppuMode == 0) {
             newStatLine = true;
         }
         
-        if ((stat & 0x10) != 0 && ppuMode == 1) { // V-Blank interrupt
+        // Mode 1 (V-Blank) interrupt  
+        if ((stat & 0x10) != 0 && ppuMode == 1) {
             newStatLine = true;
         }
         
-        if ((stat & 0x20) != 0 && ppuMode == 2) { // OAM interrupt
+        // Mode 2 (OAM) interrupt
+        if ((stat & 0x20) != 0 && ppuMode == 2) {
             newStatLine = true;
         }
         
-        // LYC=LY interrupt
+        // LYC=LY interrupt - comparação acontece em ciclos específicos
         boolean lycEqualsLy = (ly == lyc);
+        
+        // Atualizar a flag LYC=LY no registrador STAT
         if (lycEqualsLy) {
-            stat |= 0x04; // Set LYC=LY flag
-            if ((stat & 0x40) != 0) { // LYC=LY interrupt enabled
+            stat |= 0x04; // Set bit 2 (LYC=LY flag)
+        } else {
+            stat &= ~0x04; // Clear bit 2
+        }
+        
+        // A interrupção LYC=LY é disparada quando:
+        // 1. LYC=LY interrupt está habilitada (bit 6 do STAT)
+        // 2. A condição LYC=LY é verdadeira
+        // 3. Estamos em um ciclo onde a comparação deve ocorrer (lycComparisonThisCycle)
+        //    ou a comparação acabou de se tornar verdadeira (edge detection)
+        if ((stat & 0x40) != 0 && lycEqualsLy) {
+            // Se estamos em um ciclo de comparação ou houve transição 0→1
+            if (lycComparisonThisCycle || (!previousLycEqualsLy && lycEqualsLy)) {
                 newStatLine = true;
             }
-        } else {
-            stat &= ~0x04; // Clear LYC=LY flag
         }
         
+        // Atualizar estado anterior para próxima comparação
+        previousLycEqualsLy = lycEqualsLy;
+        
+        // Reset da flag de comparação (ela é setada apenas em ciclos específicos)
+        lycComparisonThisCycle = false;
+        
         // Disparar interrupção apenas na borda de subida (edge detection)
+        // Isso previne múltiplas interrupções da mesma condição
         if (newStatLine && !statInterruptLine) {
             requestLcdStatInterrupt();
         }
@@ -969,6 +1086,8 @@ public class PPU {
             cyclesCounter = 0;
             scanlineCycles = 0;
             statInterruptLine = false;
+            previousLycEqualsLy = false;
+            lycComparisonThisCycle = false;
             updateStatRegister();
             
             // Limpa a tela
@@ -984,12 +1103,56 @@ public class PPU {
             cyclesCounter = 0;
             scanlineCycles = 0;
             statInterruptLine = false;
+            previousLycEqualsLy = false;
+            lycComparisonThisCycle = false;
             updateStatRegister();
         }
     }
 
     public int getStat() { return (stat & 0xFF) | 0x80; } // Bit 7 do STAT é sempre 1
-    public void setStat(int value) { this.stat = (value & 0x7F); } // Ignora escrita no bit 7
+    public void setStat(int value) { 
+        // Salvar o estado anterior da linha STAT antes da escrita
+        boolean oldStatLine = statInterruptLine;
+        
+        // Preservar os bits read-only (bits 0-2: modo e LYC=LY flag)
+        // Apenas os bits 3-6 (interrupt enables) podem ser escritos
+        int readOnlyBits = stat & 0x07; // Bits 0-2 (modo atual e LYC=LY flag)
+        this.stat = (value & 0x78) | readOnlyBits; // Bits 3-6 são writable, bit 7 é sempre 1
+        
+        // STAT write bug: escrever no STAT pode causar uma interrupção espúria
+        // Isto acontece se:
+        // 1. O LCD está ligado
+        // 2. Não estamos no modo 1 (V-Blank) - o bug não ocorre no V-Blank
+        // 3. A linha STAT estava baixa (false) antes da escrita
+        // 
+        // A razão é que escrever no STAT causa um pequeno glitch no hardware
+        // que pode ser interpretado como uma borda de subida na linha STAT
+        if (isLcdEnabled() && ppuMode != 1 && !oldStatLine) {
+            // Verificar se alguma condição de interrupção está ativa após a escrita
+            boolean anyConditionActive = false;
+            
+            // Mode 0 interrupt
+            if ((stat & 0x08) != 0 && ppuMode == 0) {
+                anyConditionActive = true;
+            }
+            
+            // Mode 2 interrupt
+            if ((stat & 0x20) != 0 && ppuMode == 2) {
+                anyConditionActive = true;
+            }
+            
+            // LYC=LY interrupt
+            if ((stat & 0x40) != 0 && (stat & 0x04) != 0) {
+                anyConditionActive = true;
+            }
+            
+            // Se alguma condição está ativa, disparar interrupção espúria (STAT write bug)
+            if (anyConditionActive) {
+                requestLcdStatInterrupt();
+                statInterruptLine = true; // Atualizar o estado da linha
+            }
+        }
+    }
 
     public int getScy() { return scy; }
     public void setScy(int value) { this.scy = value & 0xFF; }
@@ -1002,8 +1165,24 @@ public class PPU {
 
     public int getLyc() { return lyc; }
     public void setLyc(int value) { 
-        this.lyc = value & 0xFF; 
-        // A verificação LYC=LY agora é feita automaticamente em updateStatInterrupts()
+        this.lyc = value & 0xFF;
+        
+        // Escrever em LYC pode causar uma comparação imediata (não é exatamente um bug, mas comportamento do hardware)
+        // A comparação LYC=LY normalmente acontece em ciclos específicos, mas mudanças em LYC
+        // podem disparar uma verificação imediata
+        boolean newLycEqualsLy = (ly == lyc);
+        
+        // Se a nova comparação é verdadeira e a anterior era falsa, isso é uma transição
+        if (newLycEqualsLy && !previousLycEqualsLy) {
+            lycComparisonThisCycle = true; // Marcar para verificação neste ciclo
+        }
+        
+        // Atualizar imediatamente a flag LYC=LY no STAT
+        if (newLycEqualsLy) {
+            stat |= 0x04;
+        } else {
+            stat &= ~0x04;
+        }
     }
 
     public int getBgp() { return bgp; }

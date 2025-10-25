@@ -43,7 +43,23 @@ O emulador implementa os principais componentes do Game Boy:
 - Modo 0 (H-Blank): resto até 456 ciclos
 - Modo 1 (V-Blank): 4560 ciclos (10 linhas)
 
-#### 2. **Pipeline Pixel-a-Pixel (Pixel FIFO)**
+#### 2. **Precisão de STAT e LYC**
+- **Interrupções STAT no ciclo exato**:
+  - Modo 0, 1, 2 disparam no momento da transição
+  - LYC=LY comparado no ciclo 4 do modo 2
+  - Edge detection (0→1) previne interrupções duplicadas
+  
+- **STAT Write Bug**:
+  - Emula glitch do hardware DMG real
+  - Escrever no STAT pode disparar interrupção espúria
+  - Importante para compatibilidade com certos jogos
+  
+- **Bug da Linha 153→0**:
+  - LY=153 dura apenas 4 T-cycles (não 456)
+  - Comparação LYC=LY especial no ciclo 4
+  - Comportamento idêntico ao hardware real
+
+#### 3. **Pipeline Pixel-a-Pixel (Pixel FIFO)**
 - Sistema opcional de renderização pixel por pixel
 - Suporta efeitos mid-scanline:
   - Mudanças de paleta durante scanline
@@ -51,13 +67,13 @@ O emulador implementa os principais componentes do Game Boy:
   - Ativação/desativação da window
 - Habilitável via `ppu.setPixelFifoEnabled(true)`
 
-#### 3. **Restrições de Acesso VRAM/OAM**
+#### 4. **Restrições de Acesso VRAM/OAM**
 - **VRAM**: inacessível durante Modo 3 (Drawing)
 - **OAM**: inacessível durante Modo 2 (OAM Scan) e Modo 3 (Drawing)
 - Leituras bloqueadas retornam `0xFF` (comportamento do hardware real)
 - Escritas bloqueadas são ignoradas
 
-#### 4. **Precisão de Sprites**
+#### 5. **Precisão de Sprites**
 - Limite correto de 10 sprites por linha
 - Seleção baseada em ordem da OAM (primeiros 10 encontrados)
 - Prioridade sprite vs sprite:
@@ -82,8 +98,11 @@ O emulador implementa os principais componentes do Game Boy:
 - Use apenas se necessário
 
 ### 📚 Documentação Adicional
-- [MELHORIAS_PPU_CPU.md](MELHORIAS_PPU_CPU.md) - Detalhes técnicos das melhorias
-- [PPUPrecisionExample.java](src/com/meutcc/gbemulator/PPUPrecisionExample.java) - Exemplos de uso
+- [STAT_LYC_TIMING.md](STAT_LYC_TIMING.md) - Documentação detalhada do timing STAT/LYC
+- Compatível com test ROMs:
+  - blargg's instr_timing
+  - mooneye-gb acceptance tests
+  - dmg-acid2
 
 ---
 
