@@ -41,15 +41,52 @@ public class MMU {
     // --- Joypad State ---
     private byte joypadState = (byte) 0xFF;
 
-    // --- Timer State ---
+    // ========================================================================
+    // TIMER SYSTEM - Implementação Precisa do Hardware do Game Boy
+    // ========================================================================
+    // 
+    // O sistema de timers do Game Boy é crítico para:
+    // - PRNG (Pseudo-Random Number Generation) em jogos
+    // - Sincronização de áudio (APU)
+    // - Lógica de temporização de jogos
+    //
+    // REGISTRADORES:
+    // - DIV  (0xFF04): Incrementa a 16384 Hz (CPU clock / 256)
+    //                  Qualquer escrita reseta para 0x00
+    // - TIMA (0xFF05): Timer programável, incrementa na frequência do TAC
+    // - TMA  (0xFF06): Valor de recarga quando TIMA faz overflow
+    // - TAC  (0xFF07): Timer Control
+    //                  Bit 2: Timer Enable (0=Stop, 1=Run)
+    //                  Bit 1-0: Frequência (00=4096Hz, 01=262144Hz, 10=65536Hz, 11=16384Hz)
+    //
+    // COMPORTAMENTO CRÍTICO:
+    // 1. DIV incrementa continuamente, nunca para
+    // 2. TIMA incrementa em FALLING EDGE (1→0) do bit selecionado
+    // 3. Overflow de TIMA: 4 ciclos de delay antes de reload TMA
+    // 4. DIV reset glitch: resetar DIV pode causar incremento de TIMA
+    // 5. TAC write glitch: mudar TAC pode causar incremento de TIMA
+    //
+    // REFERÊNCIAS:
+    // - Pan Docs: https://gbdev.io/pandocs/Timer_and_Divider_Registers.html
+    // - TCAGBD: https://github.com/AntonioND/giibiiadvance/blob/master/docs/TCAGBD.pdf
+    // ========================================================================
+    
     private int divCounter = 0;  // Contador interno de 16-bit para DIV
     
     // Bits do DIV selecionados por TAC para TIMA
-    // TAC[1:0] = 00: bit 9 (4096 Hz)
-    // TAC[1:0] = 01: bit 3 (262144 Hz) 
-    // TAC[1:0] = 10: bit 5 (65536 Hz)
-    // TAC[1:0] = 11: bit 7 (16384 Hz)
+    // TAC[1:0] = 00: bit 9 (4096 Hz)    - incremento a cada 1024 T-cycles
+    // TAC[1:0] = 01: bit 3 (262144 Hz)  - incremento a cada 16 T-cycles
+    // TAC[1:0] = 10: bit 5 (65536 Hz)   - incremento a cada 64 T-cycles
+    // TAC[1:0] = 11: bit 7 (16384 Hz)   - incremento a cada 256 T-cycles
     private static final int[] TIMER_BIT_POSITIONS = {9, 3, 5, 7};
+    
+    // Estado do overflow do TIMA para timing preciso
+    // Quando TIMA faz overflow (0xFF → 0x00), há 4 ciclos de delay antes de:
+    // 1. TIMA ser recarregado com TMA
+    // 2. Interrupção de Timer ser solicitada
+    // Durante esse delay, escritas em TIMA podem cancelar o reload
+    private int timaOverflowDelay = 0; // Contador de delay do overflow (0-4 ciclos)
+    private boolean timaOverflowPending = false; // Flag de overflow pendente
 
     // --- DMA State ---
     private int dmaCyclesRemaining = 0;
@@ -97,6 +134,8 @@ public class MMU {
         joypadState = (byte) 0xFF;
         // --- Reset Timer State ---
         divCounter = 0;
+        timaOverflowPending = false;
+        timaOverflowDelay = 0;
         serialTransferCounter = 0;
         serialTransferInProgress = false;
         bootRomEnabled = false; // Assumindo que não estamos carregando uma boot rom real por padrão
@@ -105,7 +144,7 @@ public class MMU {
     }
 
     public void updateTimers(int cycles) {
-        // Atualizar DIV contador interno (16-bit) a cada ciclo
+        // Atualizar timers ciclo por ciclo para precisão máxima
         for (int i = 0; i < cycles; i++) {
             updateTimersSingleCycle();
         }
@@ -122,46 +161,89 @@ public class MMU {
     }
     
     /**
-     * Atualiza os timers de forma precisa, ciclo por ciclo
+     * Atualiza os timers de forma precisa, ciclo por ciclo.
+     * 
+     * Comportamento do Timer do Game Boy:
+     * - DIV incrementa a cada 256 T-cycles (16384 Hz no clock de 4.194304 MHz)
+     * - TIMA incrementa quando há uma transição de 1→0 (falling edge) no bit selecionado do divCounter
+     * - TAC bits 0-1 selecionam qual bit do divCounter monitorar
+     * - TAC bit 2 habilita/desabilita o timer
+     * 
+     * Frequências de TIMA baseadas no TAC[1:0]:
+     * - 00: bit 9 do divCounter → 4096 Hz (cada 1024 T-cycles)
+     * - 01: bit 3 do divCounter → 262144 Hz (cada 16 T-cycles)
+     * - 10: bit 5 do divCounter → 65536 Hz (cada 64 T-cycles)
+     * - 11: bit 7 do divCounter → 16384 Hz (cada 256 T-cycles)
      */
     private void updateTimersSingleCycle() {
-        // Salvar o estado atual do bit selecionado ANTES de incrementar
-        int tac = memory[REG_TAC] & 0xFF;
-        int oldTimerBit = 0;
-        
-        if ((tac & 0x04) != 0) { // Timer habilitado
-            int bitPosition = TIMER_BIT_POSITIONS[tac & 0x03];
-            oldTimerBit = (divCounter >> bitPosition) & 1;
-        }
+        // Salvar o bit do timer ANTES do incremento para detectar falling edge
+        int oldTimerBit = getTimerBit();
         
         // Incrementar o contador interno DIV de 16-bit
+        // Este contador roda continuamente e nunca para
         divCounter = (divCounter + 1) & 0xFFFF;
         
         // Atualizar o registrador DIV visível (bits 8-15 do contador interno)
+        // DIV incrementa a 16384 Hz (clock / 256)
         memory[REG_DIV] = (byte) ((divCounter >> 8) & 0xFF);
         
-        // Verificar se TIMA deve incrementar baseado na transição
-        if ((tac & 0x04) != 0) { // Timer habilitado
-            int bitPosition = TIMER_BIT_POSITIONS[tac & 0x03];
-            int newTimerBit = (divCounter >> bitPosition) & 1;
-            
-            // Detectar borda de subida (0 → 1)
-            if (oldTimerBit == 0 && newTimerBit == 1) {
-                incrementTIMA();
+        // Detectar falling edge (1 → 0) no bit do timer
+        int newTimerBit = getTimerBit();
+        if (oldTimerBit == 1 && newTimerBit == 0) {
+            incrementTIMA();
+        }
+        
+        // Processar delay do overflow do TIMA (4 ciclos)
+        if (timaOverflowPending) {
+            timaOverflowDelay++;
+            if (timaOverflowDelay >= 4) {
+                // Após 4 ciclos, recarregar TIMA com TMA e disparar interrupção
+                memory[REG_TIMA] = memory[REG_TMA];
+                memory[REG_IF] |= 0x04; // Timer interrupt
+                timaOverflowPending = false;
+                timaOverflowDelay = 0;
             }
         }
     }
     
     /**
-     * Incrementa TIMA e trata overflow
+     * Obtém o bit atual do timer baseado na configuração do TAC.
+     * Retorna 0 se o timer estiver desabilitado.
+     * 
+     * @return 1 se o bit está setado, 0 caso contrário
+     */
+    private int getTimerBit() {
+        int tac = memory[REG_TAC] & 0xFF;
+        
+        // Se o timer não está habilitado, retornar 0
+        if ((tac & 0x04) == 0) {
+            return 0;
+        }
+        
+        // Obter o bit selecionado pelo TAC[1:0]
+        int bitPosition = TIMER_BIT_POSITIONS[tac & 0x03];
+        return (divCounter >> bitPosition) & 1;
+    }
+    
+    /**
+     * Incrementa TIMA e inicia o processo de overflow se necessário.
+     * 
+     * Comportamento do overflow do TIMA:
+     * - Quando TIMA passa de 0xFF para 0x00, há um delay de 4 T-cycles
+     * - Durante esse delay, TIMA permanece em 0x00
+     * - Após 4 ciclos, TIMA é recarregado com TMA e a interrupção é disparada
+     * - Escritas em TIMA durante o delay podem cancelar o reload
      */
     private void incrementTIMA() {
         int tima = memory[REG_TIMA] & 0xFF;
+        
         if (tima == 0xFF) {
-            memory[REG_TIMA] = memory[REG_TMA]; // Reset TIMA to TMA
-            // Request Timer Interrupt
-            memory[REG_IF] |= 0x04;
+            // Overflow: TIMA vai para 0x00 e inicia o processo de reload
+            memory[REG_TIMA] = 0x00;
+            timaOverflowPending = true;
+            timaOverflowDelay = 0;
         } else {
+            // Incremento normal
             memory[REG_TIMA] = (byte) ((tima + 1) & 0xFF);
         }
     }
@@ -332,24 +414,20 @@ public class MMU {
     private void writeIORegister(int address, byte value) {
         switch (address) {
             case REG_DIV:
-                // Verificar se o reset do DIV pode disparar TIMA (glitch de hardware)
-                int tac = memory[REG_TAC] & 0xFF;
-                if ((tac & 0x04) != 0) { // Timer habilitado
-                    int bitPosition = TIMER_BIT_POSITIONS[tac & 0x03];
-                    int currentTimerBit = (divCounter >> bitPosition) & 1;
-                    
-                    // Se o bit estava em 1, o reset para 0 seguido de uma 
-                    // eventual transição 0→1 pode disparar TIMA
-                    // Isso simula o comportamento do hardware onde o reset
-                    // pode criar uma borda de subida artificial
-                    if (currentTimerBit == 1) {
-                        incrementTIMA();
-                    }
-                }
+                // Salvar o bit do timer ANTES do reset do DIV
+                // Qualquer escrita em DIV reseta o contador interno para 0
+                int oldDivTimerBit = getTimerBit();
                 
-                // Resetar DIV para 0
+                // Resetar DIV e o contador interno para 0
                 divCounter = 0;
                 memory[REG_DIV] = 0;
+                
+                // DIV reset glitch: Se o bit do timer estava em 1, 
+                // resetá-lo para 0 cria uma falling edge (1→0)
+                // Isto deve incrementar TIMA
+                if (oldDivTimerBit == 1) {
+                    incrementTIMA();
+                }
                 break;
             case REG_JOYP:
                 memory[REG_JOYP] = (byte) ((memory[REG_JOYP] & 0xCF) | (value & 0x30));
@@ -366,13 +444,39 @@ public class MMU {
                 }
                 break;
             case REG_TIMA:
+                // Escrever em TIMA cancela o overflow pendente
                 memory[REG_TIMA] = value;
+                if (timaOverflowPending) {
+                    // Cancelar o reload de TMA e a interrupção pendente
+                    timaOverflowPending = false;
+                    timaOverflowDelay = 0;
+                }
                 break;
             case REG_TMA:
                 memory[REG_TMA] = value;
+                // Se houver overflow pendente no último ciclo do delay, 
+                // TMA pode afetar o valor recarregado
+                if (timaOverflowPending && timaOverflowDelay >= 3) {
+                    memory[REG_TIMA] = value;
+                }
                 break;
             case REG_TAC:
+                // Salvar o bit do timer ANTES da mudança
+                int oldTacTimerBit = getTimerBit();
+                
+                // Atualizar TAC
                 memory[REG_TAC] = value;
+                
+                // Verificar se houve falling edge devido à mudança no TAC
+                // Isto pode acontecer se:
+                // 1. O timer estava habilitado e foi desabilitado (bit 2: 1→0)
+                // 2. A frequência mudou e o novo bit selecionado é 0 enquanto o antigo era 1
+                int newTimerBit = getTimerBit();
+                
+                // TAC write glitch: se havia 1 e agora há 0, incrementar TIMA
+                if (oldTacTimerBit == 1 && newTimerBit == 0) {
+                    incrementTIMA();
+                }
                 break;
             case REG_IF:
                 memory[REG_IF] = (byte) (value & 0x1F);
@@ -497,6 +601,8 @@ public class MMU {
         // Save I/O registers
         dos.writeByte(joypadState);
         dos.writeInt(divCounter);
+        dos.writeBoolean(timaOverflowPending);
+        dos.writeInt(timaOverflowDelay);
         dos.writeByte(memory[REG_IF]);
         dos.writeByte(memory[REG_IE]);
     }
@@ -513,6 +619,8 @@ public class MMU {
         // Load I/O registers
         joypadState = dis.readByte();
         divCounter = dis.readInt();
+        timaOverflowPending = dis.readBoolean();
+        timaOverflowDelay = dis.readInt();
         memory[REG_IF] = dis.readByte();
         memory[REG_IE] = dis.readByte();
     }
