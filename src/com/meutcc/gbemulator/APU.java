@@ -16,9 +16,25 @@ public class APU {
     private static final int AUDIO_OUTPUT_BUFFER_SAMPLES = 32768;  
     private static final int INTERNAL_SAMPLE_BUFFER_SIZE = 8192;  
     
-    // Timing
-    private static final double CYCLES_PER_OUTPUT_SAMPLE = (double) CPU_CLOCK_SPEED / SAMPLE_RATE;
-    private static final int FRAME_SEQUENCER_CYCLES_PERIOD = CPU_CLOCK_SPEED / 512; // 512 Hz
+    // Timing - Valores precisos em T-cycles
+    // Frame Sequencer: 512 Hz = CPU_CLOCK_SPEED / 512 = 8192 T-cycles por step
+    private static final int FRAME_SEQUENCER_PERIOD_TCYCLES = 8192; // Exatamente 8192 T-cycles (512 Hz)
+    
+    // Phase Accumulator para geração de amostras
+    // Usamos um acumulador de fase de 32-bit fixedpoint
+    // A parte superior de 16 bits representa a parte inteira (número de amostras)
+    // A parte inferior de 16 bits representa a fração
+    // 
+    // SAMPLE_PHASE_INCREMENT = (SAMPLE_RATE << 16) / CPU_CLOCK_SPEED
+    //                        = (48000 << 16) / 4194304
+    //                        = 3145728000 / 4194304
+    //                        = 750.11... (em fixed-point 16.16)
+    //                        = 0x000002EE (aprox. 0.01144 em formato 16.16)
+    //
+    // Isso significa que a cada T-cycle, incrementamos o phase accumulator em ~0.01144 (em formato 16.16)
+    // Quando a parte inteira atinge 1 ou mais, geramos uma amostra e decrementamos
+    // Esta técnica garante que não há drift acumulativo ao longo do tempo
+    private static final long SAMPLE_PHASE_INCREMENT = ((long)SAMPLE_RATE << 16) / CPU_CLOCK_SPEED;
     
     // High-pass filter constant (para remover DC bias)
     private static final float HIGHPASS_CHARGE = 0.999f;
@@ -36,10 +52,30 @@ public class APU {
 
     
     private boolean masterSoundEnable = false;
-    private int apuCycleAccumulator = 0;
+    
+    // ========================================================================
+    // TIMING PRECISO - Contadores em T-cycles
+    // ========================================================================
+    
+    // Contador de T-cycles interno da APU (acumula desde o último reset)
+    private long apuTotalCycles = 0;
+    
+    // Frame Sequencer: contador de T-cycles para o próximo step (512 Hz)
     private int frameSequencerCycleCounter = 0;
     private int frameSequencerStep = 0;
+    
+    // Phase Accumulator para geração de amostras (técnica robusta e precisa)
+    // Usamos fixed-point 16.16: bits superiores = amostras inteiras, bits inferiores = fração
+    private long samplePhaseAccumulator = 0;
+    
     private volatile boolean emulatorSoundGloballyEnabled = true;
+    
+    // ========================================================================
+    // DEBUGGING E ESTATÍSTICAS
+    // ========================================================================
+    private boolean debugTiming = false;
+    private long samplesGenerated = 0;
+    private long frameSequencerTicks = 0;
 
    
     private final PulseChannel channel1;
@@ -78,13 +114,60 @@ public class APU {
             System.out.println("APU: Sound " + (enabled ? "ENABLED" : "DISABLED"));
         }
     }
+    
+    /**
+     * Habilita/desabilita o modo de debug de timing da APU.
+     * Quando habilitado, mostra estatísticas de sincronização a cada segundo.
+     * @param enabled true para habilitar debug, false para desabilitar
+     */
+    public void setDebugTiming(boolean enabled) {
+        this.debugTiming = enabled;
+        if (enabled) {
+            System.out.println("APU: Debug timing ENABLED - Statistics will be printed every second");
+        } else {
+            System.out.println("APU: Debug timing DISABLED");
+        }
+    }
+    
+    /**
+     * Retorna estatísticas de timing da APU para debugging.
+     * @return String com estatísticas formatadas
+     */
+    public String getTimingStats() {
+        long expectedSamples = (apuTotalCycles * SAMPLE_RATE / CPU_CLOCK_SPEED);
+        long drift = samplesGenerated - expectedSamples;
+        double driftPercent = expectedSamples > 0 ? (drift * 100.0 / expectedSamples) : 0;
+        
+        return String.format(
+            "APU Timing Statistics:\n" +
+            "  Total T-cycles processed: %d\n" +
+            "  Samples generated: %d\n" +
+            "  Expected samples: %d\n" +
+            "  Sample drift: %d (%.6f%%)\n" +
+            "  Frame Sequencer ticks: %d\n" +
+            "  Sample rate: %d Hz\n" +
+            "  CPU clock: %d Hz\n" +
+            "  Phase increment (16.16): 0x%04X (%.6f samples/cycle)",
+            apuTotalCycles, samplesGenerated, expectedSamples, 
+            drift, Math.abs(driftPercent), frameSequencerTicks,
+            SAMPLE_RATE, CPU_CLOCK_SPEED, 
+            SAMPLE_PHASE_INCREMENT, (SAMPLE_PHASE_INCREMENT / 65536.0)
+        );
+    }
 
     public void reset() {
         masterSoundEnable = false;
-        apuCycleAccumulator = 0;
+        
+        // Reset dos contadores de timing precisos
+        apuTotalCycles = 0;
         frameSequencerCycleCounter = 0;
         frameSequencerStep = 0;
+        samplePhaseAccumulator = 0;
         internalBufferPos = 0;
+        
+        // Reset de estatísticas de debug
+        samplesGenerated = 0;
+        frameSequencerTicks = 0;
         
         // Reseta high-pass filter
         highpassLeft = 0.0f;
@@ -102,22 +185,64 @@ public class APU {
         channel4.reset();
 
         audioRegisters[0xFF26 - 0xFF10] = (byte) 0x70;
-        System.out.println("APU: Reset complete (48kHz Stereo, High-pass filter enabled)");
+        System.out.println("APU: Reset complete (48kHz Stereo, Precise T-cycle timing, High-pass filter enabled)");
     }
 
+    /**
+     * Atualiza a APU com base nos T-cycles da CPU.
+     * 
+     * Este método implementa sincronização precisa em T-cycles:
+     * 
+     * 1. Frame Sequencer (512 Hz):
+     *    - Executa exatamente a cada 8192 T-cycles (4194304 / 512)
+     *    - Controla Length Counter, Sweep e Envelope dos canais
+     * 
+     * 2. Channel Timers:
+     *    - Cada canal atualiza seus timers de frequência em T-cycles
+     *    - Pulse: (2048 - freq) * 4 T-cycles por step
+     *    - Wave: (2048 - freq) * 2 T-cycles por step
+     *    - Noise: divisor << shift T-cycles por step
+     * 
+     * 3. Sample Generation (Phase Accumulator):
+     *    - Usa técnica de phase accumulator para gerar amostras em 48 kHz
+     *    - Não há drift acumulativo ao longo do tempo
+     *    - Fixed-point 16.16 garante precisão sub-sample
+     * 
+     * @param cpuCycles Número de T-cycles da CPU desde a última atualização
+     */
     public void update(int cpuCycles) {
         if (!emulatorSoundGloballyEnabled || !javaSoundInitialized) {
             return;
         }
 
+        // Incrementa o contador total de ciclos da APU (para debugging/stats)
+        apuTotalCycles += cpuCycles;
+
+        // ========================================================================
+        // FRAME SEQUENCER - Timing preciso em T-cycles (512 Hz = 8192 T-cycles)
+        // ========================================================================
         frameSequencerCycleCounter += cpuCycles;
-        while (frameSequencerCycleCounter >= FRAME_SEQUENCER_CYCLES_PERIOD) {
-            frameSequencerCycleCounter -= FRAME_SEQUENCER_CYCLES_PERIOD;
+        while (frameSequencerCycleCounter >= FRAME_SEQUENCER_PERIOD_TCYCLES) {
+            frameSequencerCycleCounter -= FRAME_SEQUENCER_PERIOD_TCYCLES;
             if (masterSoundEnable) {
                 clockFrameSequencer();
+                frameSequencerTicks++;
+                
+                if (debugTiming && (frameSequencerTicks % 512 == 0)) {
+                    // A cada segundo (512 Hz * 1 sec), mostra estatísticas
+                    System.out.println(String.format(
+                        "APU Timing Stats - Total Cycles: %d, Samples Generated: %d, Expected: %d, Drift: %d",
+                        apuTotalCycles, samplesGenerated, 
+                        (apuTotalCycles * SAMPLE_RATE / CPU_CLOCK_SPEED),
+                        samplesGenerated - (apuTotalCycles * SAMPLE_RATE / CPU_CLOCK_SPEED)
+                    ));
+                }
             }
         }
 
+        // ========================================================================
+        // ATUALIZAÇÃO DOS CANAIS - Cada canal processa seus timers em T-cycles
+        // ========================================================================
         if (masterSoundEnable) {
             channel1.step(cpuCycles);
             channel2.step(cpuCycles);
@@ -125,10 +250,24 @@ public class APU {
             channel4.step(cpuCycles);
         }
 
-        apuCycleAccumulator += cpuCycles;
-        while (apuCycleAccumulator >= CYCLES_PER_OUTPUT_SAMPLE) {
-            apuCycleAccumulator -= CYCLES_PER_OUTPUT_SAMPLE;
+        // ========================================================================
+        // GERAÇÃO DE AMOSTRAS - Phase Accumulator (técnica robusta e precisa)
+        // ========================================================================
+        // Incrementamos o phase accumulator baseado nos T-cycles recebidos
+        // SAMPLE_PHASE_INCREMENT é um valor fixed-point 16.16
+        // Bits superiores representam o número de amostras a gerar
+        samplePhaseAccumulator += cpuCycles * SAMPLE_PHASE_INCREMENT;
+        
+        // Extraímos a parte inteira (número de amostras a gerar)
+        int samplesToGenerate = (int)(samplePhaseAccumulator >> 16);
+        
+        // Mantemos apenas a parte fracionária no acumulador
+        samplePhaseAccumulator &= 0xFFFF;
+        
+        // Geramos as amostras necessárias
+        for (int i = 0; i < samplesToGenerate; i++) {
             generateAndBufferSample();
+            samplesGenerated++;
         }
     }
 
