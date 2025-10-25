@@ -3,18 +3,17 @@ package com.meutcc.gbemulator;
 import java.util.Arrays;
 
 public class MMU {
-    private final byte[] memory = new byte[0x10000]; // 64KB de espaço de endereço
+    private final byte[] memory = new byte[0x10000];
 
     private Cartridge cartridge;
     private final PPU ppu;
     private final APU apu;
-    private CPU cpu; // Reference to CPU for waking from STOP
+    private CPU cpu;
 
-    // Estado do Boot ROM
-    private boolean bootRomEnabled = false; // Começa desabilitado se não houver arquivo de boot rom
-    private final byte[] bootRom = new byte[256]; // Se você tiver um boot rom para carregar
+    private boolean bootRomEnabled = false;
+    private final byte[] bootRom = new byte[256];
 
-    // --- I/O Registers ---
+
     public static final int REG_JOYP = 0xFF00;
     public static final int REG_SB = 0xFF01;
     public static final int REG_SC = 0xFF02;
@@ -39,61 +38,18 @@ public class MMU {
     public static final int REG_BOOT_ROM_DISABLE = 0xFF50;
     public static final int REG_IE = 0xFFFF;
 
-    // --- Joypad State ---
     private byte joypadState = (byte) 0xFF;
 
-    // ========================================================================
-    // TIMER SYSTEM - Implementação Precisa do Hardware do Game Boy
-    // ========================================================================
-    // 
-    // O sistema de timers do Game Boy é crítico para:
-    // - PRNG (Pseudo-Random Number Generation) em jogos
-    // - Sincronização de áudio (APU)
-    // - Lógica de temporização de jogos
-    //
-    // REGISTRADORES:
-    // - DIV  (0xFF04): Incrementa a 16384 Hz (CPU clock / 256)
-    //                  Qualquer escrita reseta para 0x00
-    // - TIMA (0xFF05): Timer programável, incrementa na frequência do TAC
-    // - TMA  (0xFF06): Valor de recarga quando TIMA faz overflow
-    // - TAC  (0xFF07): Timer Control
-    //                  Bit 2: Timer Enable (0=Stop, 1=Run)
-    //                  Bit 1-0: Frequência (00=4096Hz, 01=262144Hz, 10=65536Hz, 11=16384Hz)
-    //
-    // COMPORTAMENTO CRÍTICO:
-    // 1. DIV incrementa continuamente, nunca para
-    // 2. TIMA incrementa em FALLING EDGE (1→0) do bit selecionado
-    // 3. Overflow de TIMA: 4 ciclos de delay antes de reload TMA
-    // 4. DIV reset glitch: resetar DIV pode causar incremento de TIMA
-    // 5. TAC write glitch: mudar TAC pode causar incremento de TIMA
-    //
-    // REFERÊNCIAS:
-    // - Pan Docs: https://gbdev.io/pandocs/Timer_and_Divider_Registers.html
-    // - TCAGBD: https://github.com/AntonioND/giibiiadvance/blob/master/docs/TCAGBD.pdf
-    // ========================================================================
-    
-    private int divCounter = 0;  // Contador interno de 16-bit para DIV
-    
-    // Bits do DIV selecionados por TAC para TIMA
-    // TAC[1:0] = 00: bit 9 (4096 Hz)    - incremento a cada 1024 T-cycles
-    // TAC[1:0] = 01: bit 3 (262144 Hz)  - incremento a cada 16 T-cycles
-    // TAC[1:0] = 10: bit 5 (65536 Hz)   - incremento a cada 64 T-cycles
-    // TAC[1:0] = 11: bit 7 (16384 Hz)   - incremento a cada 256 T-cycles
+    private int divCounter = 0;
+
     private static final int[] TIMER_BIT_POSITIONS = {9, 3, 5, 7};
-    
-    // Estado do overflow do TIMA para timing preciso
-    // Quando TIMA faz overflow (0xFF → 0x00), há 4 ciclos de delay antes de:
-    // 1. TIMA ser recarregado com TMA
-    // 2. Interrupção de Timer ser solicitada
-    // Durante esse delay, escritas em TIMA podem cancelar o reload
-    private int timaOverflowDelay = 0; // Contador de delay do overflow (0-4 ciclos)
-    private boolean timaOverflowPending = false; // Flag de overflow pendente
 
-    // --- DMA State ---
+    private int timaOverflowDelay = 0;
+    private boolean timaOverflowPending = false;
+
     private int dmaCyclesRemaining = 0;
-    private boolean dmaMemoryBlocked = false; // Bloqueio de memória durante OAM DMA
+    private boolean dmaMemoryBlocked = false;
 
-    // --- Serial State ---
     private int serialTransferCounter = 0;
     private boolean serialTransferInProgress = false;
 
@@ -101,14 +57,10 @@ public class MMU {
         this.cartridge = cartridge;
         this.ppu = ppu;
         this.apu = apu;
-        this.cpu = null; // Will be set later
+        this.cpu = null;
         Arrays.fill(memory, (byte) 0x00);
     }
-    
-    /**
-     * Set the CPU reference for waking from STOP mode.
-     * Must be called after CPU is created.
-     */
+
     public void setCpu(CPU cpu) {
         this.cpu = cpu;
     }
@@ -116,8 +68,7 @@ public class MMU {
     public void reset() {
         for (int i = 0xC000; i < 0xE000; i++) memory[i] = 0;
         for (int i = 0xFF80; i < 0xFFFF; i++) memory[i] = 0;
-        
-        // Reset do estado do DMA
+
         dmaCyclesRemaining = 0;
         dmaMemoryBlocked = false;
 
@@ -142,118 +93,73 @@ public class MMU {
         writeByte(REG_BOOT_ROM_DISABLE, (byte) 0x00);
 
         joypadState = (byte) 0xFF;
-        // --- Reset Timer State ---
         divCounter = 0;
         timaOverflowPending = false;
         timaOverflowDelay = 0;
         serialTransferCounter = 0;
         serialTransferInProgress = false;
-        bootRomEnabled = false; // Assumindo que não estamos carregando uma boot rom real por padrão
+        bootRomEnabled = false;
 
         System.out.println("MMU reset and I/O registers initialized.");
     }
 
     public void updateTimers(int cycles) {
-        // Atualizar timers ciclo por ciclo para precisão máxima
         for (int i = 0; i < cycles; i++) {
             updateTimersSingleCycle();
         }
 
-        // --- Serial Logic ---
         if(serialTransferInProgress) {
             serialTransferCounter -= cycles;
             if(serialTransferCounter <= 0) {
                 serialTransferInProgress = false;
-                memory[REG_SC] &= ~0x80; // Reset transfer start flag
-                memory[REG_IF] |= 0x08; // Request Serial Interrupt
+                memory[REG_SC] &= ~0x80;
+                memory[REG_IF] |= 0x08;
             }
         }
     }
-    
-    /**
-     * Atualiza os timers de forma precisa, ciclo por ciclo.
-     * 
-     * Comportamento do Timer do Game Boy:
-     * - DIV incrementa a cada 256 T-cycles (16384 Hz no clock de 4.194304 MHz)
-     * - TIMA incrementa quando há uma transição de 1→0 (falling edge) no bit selecionado do divCounter
-     * - TAC bits 0-1 selecionam qual bit do divCounter monitorar
-     * - TAC bit 2 habilita/desabilita o timer
-     * 
-     * Frequências de TIMA baseadas no TAC[1:0]:
-     * - 00: bit 9 do divCounter → 4096 Hz (cada 1024 T-cycles)
-     * - 01: bit 3 do divCounter → 262144 Hz (cada 16 T-cycles)
-     * - 10: bit 5 do divCounter → 65536 Hz (cada 64 T-cycles)
-     * - 11: bit 7 do divCounter → 16384 Hz (cada 256 T-cycles)
-     */
+
     private void updateTimersSingleCycle() {
-        // Salvar o bit do timer ANTES do incremento para detectar falling edge
         int oldTimerBit = getTimerBit();
-        
-        // Incrementar o contador interno DIV de 16-bit
-        // Este contador roda continuamente e nunca para
+
         divCounter = (divCounter + 1) & 0xFFFF;
-        
-        // Atualizar o registrador DIV visível (bits 8-15 do contador interno)
-        // DIV incrementa a 16384 Hz (clock / 256)
+
         memory[REG_DIV] = (byte) ((divCounter >> 8) & 0xFF);
-        
-        // Detectar falling edge (1 → 0) no bit do timer
+
         int newTimerBit = getTimerBit();
         if (oldTimerBit == 1 && newTimerBit == 0) {
             incrementTIMA();
         }
-        
-        // Processar delay do overflow do TIMA (4 ciclos)
+
         if (timaOverflowPending) {
             timaOverflowDelay++;
             if (timaOverflowDelay >= 4) {
-                // Após 4 ciclos, recarregar TIMA com TMA e disparar interrupção
                 memory[REG_TIMA] = memory[REG_TMA];
-                memory[REG_IF] |= 0x04; // Timer interrupt
+                memory[REG_IF] |= 0x04;
                 timaOverflowPending = false;
                 timaOverflowDelay = 0;
             }
         }
     }
-    
-    /**
-     * Obtém o bit atual do timer baseado na configuração do TAC.
-     * Retorna 0 se o timer estiver desabilitado.
-     * 
-     * @return 1 se o bit está setado, 0 caso contrário
-     */
+
     private int getTimerBit() {
         int tac = memory[REG_TAC] & 0xFF;
-        
-        // Se o timer não está habilitado, retornar 0
+
         if ((tac & 0x04) == 0) {
             return 0;
         }
-        
-        // Obter o bit selecionado pelo TAC[1:0]
+
         int bitPosition = TIMER_BIT_POSITIONS[tac & 0x03];
         return (divCounter >> bitPosition) & 1;
     }
-    
-    /**
-     * Incrementa TIMA e inicia o processo de overflow se necessário.
-     * 
-     * Comportamento do overflow do TIMA:
-     * - Quando TIMA passa de 0xFF para 0x00, há um delay de 4 T-cycles
-     * - Durante esse delay, TIMA permanece em 0x00
-     * - Após 4 ciclos, TIMA é recarregado com TMA e a interrupção é disparada
-     * - Escritas em TIMA durante o delay podem cancelar o reload
-     */
+
     private void incrementTIMA() {
         int tima = memory[REG_TIMA] & 0xFF;
-        
+
         if (tima == 0xFF) {
-            // Overflow: TIMA vai para 0x00 e inicia o processo de reload
             memory[REG_TIMA] = 0x00;
             timaOverflowPending = true;
             timaOverflowDelay = 0;
         } else {
-            // Incremento normal
             memory[REG_TIMA] = (byte) ((tima + 1) & 0xFF);
         }
     }
@@ -261,31 +167,16 @@ public class MMU {
     public boolean isDmaActive() {
         return this.dmaCyclesRemaining > 0;
     }
-    
-    /**
-     * Verifica se o acesso à memória está bloqueado devido ao OAM DMA
-     * @return true se a memória está bloqueada, false caso contrário
-     */
+
     public boolean isDmaMemoryBlocked() {
         return this.dmaMemoryBlocked;
     }
-    
-    /**
-     * Obtém o número de ciclos restantes do DMA
-     * @return ciclos restantes do DMA
-     */
+
     public int getDmaCyclesRemaining() {
         return this.dmaCyclesRemaining;
     }
-    
-    /**
-     * Verifica se um endereço específico é acessível durante OAM DMA
-     * Durante OAM DMA, apenas HRAM (0xFF80-0xFFFE) é acessível
-     * @param address endereço a verificar
-     * @return true se o endereço é acessível durante DMA
-     */
+
     private boolean isAddressAccessibleDuringDMA(int address) {
-        // HRAM (High RAM) é sempre acessível, mesmo durante DMA
         return (address >= 0xFF80 && address <= 0xFFFE);
     }
 
@@ -293,7 +184,6 @@ public class MMU {
         if (this.dmaCyclesRemaining > 0) {
             this.dmaCyclesRemaining -= cycles;
             if (this.dmaCyclesRemaining <= 0) {
-                // DMA terminou, liberar acesso à memória
                 this.dmaMemoryBlocked = false;
             }
         }
@@ -301,16 +191,13 @@ public class MMU {
 
     public void loadCartridge(Cartridge cart) {
         this.cartridge = cart;
-        // O `readByte` agora lida com o acesso ao cartucho, não precisamos copiar a ROM inteira aqui.
         System.out.println("Cartridge loaded into MMU.");
     }
 
     public int readByte(int address) {
         address &= 0xFFFF;
-        
-        // Verificar se a memória está bloqueada devido ao OAM DMA
+
         if (dmaMemoryBlocked && !isAddressAccessibleDuringDMA(address)) {
-            // Durante OAM DMA, retornar 0xFF para endereços inacessíveis
             return 0xFF;
         }
 
@@ -346,10 +233,8 @@ public class MMU {
     public void writeByte(int address, int value) {
         address &= 0xFFFF;
         byte byteValue = (byte) (value & 0xFF);
-        
-        // Verificar se a memória está bloqueada devido ao OAM DMA
+
         if (dmaMemoryBlocked && !isAddressAccessibleDuringDMA(address)) {
-            // Durante OAM DMA, ignorar escritas para endereços inacessíveis
             return;
         }
 
@@ -366,7 +251,7 @@ public class MMU {
         } else if (address >= 0xFE00 && address <= 0xFE9F) {
             ppu.writeOAM(address - 0xFE00, byteValue);
         } else if (address >= 0xFEA0 && address <= 0xFEFF) {
-            // Ignorado
+
         } else if (address >= 0xFF00 && address <= 0xFF7F) {
             writeIORegister(address, byteValue);
         } else if (address >= 0xFF80 && address <= 0xFFFE) {
@@ -380,7 +265,7 @@ public class MMU {
         switch (address) {
             case REG_JOYP:
                 byte joypVal = memory[REG_JOYP];
-                joypVal |= 0xCF; // Começa com bits não selecionados em 1
+                joypVal |= 0xCF;
                 if ((joypVal & 0x10) == 0) {
                     return (joypVal & 0xF0) | (joypadState & 0x0F);
                 } else if ((joypVal & 0x20) == 0) {
@@ -413,7 +298,6 @@ public class MMU {
             case REG_KEY1: return memory[REG_KEY1] & 0xFF;
 
             default:
-                // Registradores de áudio APU
                 if ((address >= 0xFF10 && address <= 0xFF26) || (address >= 0xFF30 && address <= 0xFF3F)) {
                     return apu.readRegister(address);
                 }
@@ -424,17 +308,11 @@ public class MMU {
     private void writeIORegister(int address, byte value) {
         switch (address) {
             case REG_DIV:
-                // Salvar o bit do timer ANTES do reset do DIV
-                // Qualquer escrita em DIV reseta o contador interno para 0
                 int oldDivTimerBit = getTimerBit();
-                
-                // Resetar DIV e o contador interno para 0
+
                 divCounter = 0;
                 memory[REG_DIV] = 0;
-                
-                // DIV reset glitch: Se o bit do timer estava em 1, 
-                // resetá-lo para 0 cria uma falling edge (1→0)
-                // Isto deve incrementar TIMA
+
                 if (oldDivTimerBit == 1) {
                     incrementTIMA();
                 }
@@ -447,43 +325,32 @@ public class MMU {
                 break;
             case REG_SC:
                 memory[REG_SC] = value;
-                if ((value & 0x81) == 0x81) { // Inicia transferência serial (interno)
-                    memory[REG_SB] = (byte)0xFF; // Simula recebimento de nada
+                if ((value & 0x81) == 0x81) {
+                    memory[REG_SB] = (byte)0xFF;
                     serialTransferInProgress = true;
-                    serialTransferCounter = 4132; // Tempo para 8 bits a 8192 Hz
+                    serialTransferCounter = 4132;
                 }
                 break;
             case REG_TIMA:
-                // Escrever em TIMA cancela o overflow pendente
                 memory[REG_TIMA] = value;
                 if (timaOverflowPending) {
-                    // Cancelar o reload de TMA e a interrupção pendente
                     timaOverflowPending = false;
                     timaOverflowDelay = 0;
                 }
                 break;
             case REG_TMA:
                 memory[REG_TMA] = value;
-                // Se houver overflow pendente no último ciclo do delay, 
-                // TMA pode afetar o valor recarregado
                 if (timaOverflowPending && timaOverflowDelay >= 3) {
                     memory[REG_TIMA] = value;
                 }
                 break;
             case REG_TAC:
-                // Salvar o bit do timer ANTES da mudança
                 int oldTacTimerBit = getTimerBit();
-                
-                // Atualizar TAC
+
                 memory[REG_TAC] = value;
-                
-                // Verificar se houve falling edge devido à mudança no TAC
-                // Isto pode acontecer se:
-                // 1. O timer estava habilitado e foi desabilitado (bit 2: 1→0)
-                // 2. A frequência mudou e o novo bit selecionado é 0 enquanto o antigo era 1
+
                 int newTimerBit = getTimerBit();
-                
-                // TAC write glitch: se havia 1 e agora há 0, incrementar TIMA
+
                 if (oldTacTimerBit == 1 && newTimerBit == 0) {
                     incrementTIMA();
                 }
@@ -503,7 +370,7 @@ public class MMU {
             case REG_WY: ppu.setWy(value); break;
             case REG_WX: ppu.setWx(value); break;
 
-            case REG_KEY1: // Placeholder para CGB
+            case REG_KEY1:
                 memory[REG_KEY1] = value;
                 break;
 
@@ -515,11 +382,10 @@ public class MMU {
                 break;
 
             default:
-                // Registradores de áudio APU
                 if ((address >= 0xFF10 && address <= 0xFF26) || (address >= 0xFF30 && address <= 0xFF3F)) {
                     apu.writeRegister(address, value);
                 } else {
-                    memory[address] = value; // Comportamento padrão para registradores não especiais
+                    memory[address] = value;
                 }
                 break;
         }
@@ -527,28 +393,16 @@ public class MMU {
 
     private void doDMATransfer(int sourceHighByte) {
         int sourceAddress = sourceHighByte << 8;
-        
-        // Ativar bloqueio de memória durante OAM DMA
+
         this.dmaMemoryBlocked = true;
-        
-        // Transferir 160 bytes (0xA0) para a OAM
+
         for (int i = 0; i < 0xA0; i++) {
-            // A escrita na OAM é bloqueada durante o DMA, então a cópia deve ser direta.
-            // A leitura da fonte não deve ter efeitos colaterais de I/O.
-            // Uma leitura "raw" da memória seria mais segura, mas readByte funciona na maioria dos casos.
-            ppu.writeOAM(i, (byte) readByteForDMA(sourceAddress + i)); // Leitura especial para DMA
+            ppu.writeOAM(i, (byte) readByteForDMA(sourceAddress + i));
         }
-        
-        // A CPU é paralisada por 160 ciclos (não 640)
-        // 160 M-cycles para transferir 160 bytes (1 byte por M-cycle)
+
         this.dmaCyclesRemaining = 160;
     }
-    
-    /**
-     * Leitura de memória especial para DMA que ignora o bloqueio de memória
-     * @param address endereço a ser lido
-     * @return valor do byte no endereço
-     */
+
     private int readByteForDMA(int address) {
         address &= 0xFFFF;
 
@@ -583,9 +437,8 @@ public class MMU {
 
     public void buttonPressed(Button button) {
         joypadState &= (byte) ~(1 << button.bit);
-        memory[REG_IF] |= 0x10; // Solicita interrupção do Joypad
-        
-        // Wake CPU from STOP mode if it's stopped
+        memory[REG_IF] |= 0x10;
+
         if (cpu != null) {
             cpu.wakeFromStop();
         }
@@ -603,17 +456,13 @@ public class MMU {
         Button(int bit) { this.bit = bit; }
     }
 
-    // Save/Load State
     public void saveState(java.io.DataOutputStream dos) throws java.io.IOException {
-        // Save WRAM (0xC000-0xDFFF)
         for (int i = 0xC000; i <= 0xDFFF; i++) {
             dos.writeByte(memory[i]);
         }
-        // Save HRAM (0xFF80-0xFFFE)
         for (int i = 0xFF80; i <= 0xFFFE; i++) {
             dos.writeByte(memory[i]);
         }
-        // Save I/O registers
         dos.writeByte(joypadState);
         dos.writeInt(divCounter);
         dos.writeBoolean(timaOverflowPending);
@@ -623,15 +472,12 @@ public class MMU {
     }
 
     public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
-        // Load WRAM
         for (int i = 0xC000; i <= 0xDFFF; i++) {
             memory[i] = dis.readByte();
         }
-        // Load HRAM
         for (int i = 0xFF80; i <= 0xFFFE; i++) {
             memory[i] = dis.readByte();
         }
-        // Load I/O registers
         joypadState = dis.readByte();
         divCounter = dis.readInt();
         timaOverflowPending = dis.readBoolean();

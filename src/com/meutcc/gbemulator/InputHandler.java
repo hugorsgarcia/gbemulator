@@ -34,11 +34,11 @@ public class InputHandler implements KeyListener {
     private MMU.Button mapKeyCodeToButton(int keyCode) {
         switch (keyCode) {
             case KeyEvent.VK_RIGHT: return MMU.Button.GAMEBOY_RIGHT;
-            case KeyEvent.VK_LEFT:  return MMU.Button.GAMEBOY_LEFT;
-            case KeyEvent.VK_UP:    return MMU.Button.GAMEBOY_UP;
-            case KeyEvent.VK_DOWN:  return MMU.Button.GAMEBOY_DOWN;
-            case KeyEvent.VK_Z:     return MMU.Button.GAMEBOY_A;
-            case KeyEvent.VK_X:     return MMU.Button.GAMEBOY_B;
+            case KeyEvent.VK_LEFT: return MMU.Button.GAMEBOY_LEFT;
+            case KeyEvent.VK_UP: return MMU.Button.GAMEBOY_UP;
+            case KeyEvent.VK_DOWN: return MMU.Button.GAMEBOY_DOWN;
+            case KeyEvent.VK_Z: return MMU.Button.GAMEBOY_A;
+            case KeyEvent.VK_X: return MMU.Button.GAMEBOY_B;
             case KeyEvent.VK_ENTER: return MMU.Button.GAMEBOY_START;
             case KeyEvent.VK_SHIFT: return MMU.Button.GAMEBOY_SELECT;
             default: return null;

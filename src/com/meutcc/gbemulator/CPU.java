@@ -1,66 +1,5 @@
 package com.meutcc.gbemulator;
 
-/**
- * Game Boy CPU (Sharp LR35902) - Cycle-Accurate Implementation
- * 
- * This CPU is a hybrid between Intel 8080 and Zilog Z80, running at 4.194304 MHz.
- * 
- * ========================================================================
- * CYCLE-ACCURATE TIMING IMPLEMENTATION
- * ========================================================================
- * 
- * T-CYCLES vs M-CYCLES:
- * - 1 M-cycle (Machine cycle) = 4 T-cycles (Clock cycles)
- * - All timings in this implementation use T-cycles
- * - The Game Boy CPU clock runs at ~4.194 MHz (1 T-cycle ≈ 238 ns)
- * 
- * INSTRUCTION TIMING:
- * - Every instruction has a precise cycle count
- * - Conditional branches have different timings when taken vs not taken
- * - Memory accesses contribute to cycle count
- * - CB-prefixed instructions take additional cycles
- * 
- * HALT BUG:
- * - When HALT is executed with IME=0 and pending interrupts (IE & IF != 0):
- *   * CPU does NOT enter HALT state
- *   * Next instruction after HALT is executed TWICE
- *   * PC fails to increment after the byte following HALT
- * - This is a hardware bug present in all Game Boy models
- * 
- * STOP INSTRUCTION:
- * - Format: 0x10 0x00 (two bytes)
- * - CPU stops until button press
- * - On CGB, can switch CPU speed (not implemented here)
- * - Different from HALT (which can wake on any interrupt)
- * 
- * INTERRUPT SYSTEM:
- * - Interrupts checked BEFORE each instruction fetch
- * - Priority: V-Blank > LCD STAT > Timer > Serial > Joypad
- * - Servicing an interrupt takes 20 T-cycles (5 M-cycles)
- * - EI (Enable Interrupts) has 1-instruction delay before taking effect
- * - HALT wakes on pending interrupt even if IME=0 (but doesn't service it)
- * 
- * EI DELAY BEHAVIOR:
- * - EI sets a flag that enables IME after the NEXT instruction completes
- * - This allows patterns like "EI; RET" to work correctly
- * - Critical for returning from interrupt handlers safely
- * 
- * INTERRUPT TIMING:
- * - Interrupt flags (IF) are set by peripherals at specific times:
- *   * V-Blank: Start of mode 1 (line 144)
- *   * LCD STAT: Mode transitions, LYC=LY compare
- *   * Timer: TIMA overflow (with 4-cycle delay)
- *   * Serial: Transfer complete
- *   * Joypad: Button press
- * - CPU checks interrupts between instructions (not during)
- * 
- * ========================================================================
- * REFERENCES:
- * - Pan Docs: https://gbdev.io/pandocs/
- * - TCAGBD: The Cycle-Accurate Game Boy Docs
- * - GBDev: https://gbdev.gg8.se/wiki/articles/Main_Page
- * ========================================================================
- */
 public class CPU {
 
     private final MMU mmu;
@@ -77,15 +16,13 @@ public class CPU {
     private boolean ime;
     private boolean halted;
     private int cycles = 0;
-    
+
     private boolean debugUndocumentedOpcodes = false;
-    
+
     private boolean haltBugTriggered = false;
-    
-    // EI (Enable Interrupt) delay: IME is enabled after the instruction following EI
+
     private boolean eiExecuted = false;
-    
-    // STOP state tracking
+
     private boolean stopped = false;
 
     public CPU(MMU mmu) {
@@ -109,47 +46,20 @@ public class CPU {
         System.out.println("CPU reset. PC=" + String.format("0x%04X", pc));
     }
     
-    /**
-     * Habilita debug de opcodes não documentados para desenvolvimento e teste.
-     * @param enable
-     */
     public void setDebugUndocumentedOpcodes(boolean enable) {
         this.debugUndocumentedOpcodes = enable;
     }
     
-    /**
-     * Implementa a lógica do HALT e do "HALT Bug".
-     * 
-     * COMPORTAMENTO NORMAL DO HALT:
-     * - IME=1: CPU entra em HALT e acorda quando uma interrupção habilitada é solicitada
-     * - IME=0 e nenhuma interrupção pendente: CPU entra em HALT e acorda quando IE & IF != 0
-     * 
-     * HALT BUG (Hardware Bug):
-     * - Ocorre quando: IME=0 E há interrupção pendente (IE & IF & 0x1F != 0)
-     * - Efeito: CPU NÃO entra em HALT, mas o PC falha em incrementar após o próximo fetch
-     * - Resultado: A próxima instrução após HALT é executada DUAS vezes
-     * - Este é um bug real do hardware presente em todos os modelos de Game Boy
-     * 
-     * IMPLEMENTAÇÃO:
-     * - Detectamos a condição do HALT bug aqui
-     * - Setamos flag haltBugTriggered para que step() decremente PC antes da próxima execução
-     * - A instrução seguinte ao HALT será executada duas vezes, mas PC avançará apenas uma vez
-     * 
-     * Ciclos: HALT consome 4 T-cycles (1 M-cycle)
-     */
     private void executeHalt() {
         byte IE = (byte) mmu.readByte(0xFFFF);
         byte IF = (byte) mmu.readByte(0xFF0F);
         boolean interruptPending = (IE & IF & 0x1F) != 0;
         
         if (!ime && interruptPending) {
-            // HALT bug: IME=0 mas há interrupção pendente
-            // A CPU não entra em HALT, mas a próxima instrução será executada duas vezes
             haltBugTriggered = true;
             halted = false;
             System.out.println("HALT bug triggered! Next instruction will be executed twice.");
         } else {
-            // Comportamento normal do HALT
             halted = true;
             haltBugTriggered = false;
         }
@@ -159,40 +69,31 @@ public class CPU {
         cycles = 0;
         int executedCyclesThisStep = 0;
 
-        // Handle interrupts BEFORE fetching next instruction
-        // This ensures interrupts are checked at the correct timing
-        // If an interrupt is serviced, handleInterrupts() sets cycles to 20
         handleInterrupts();
-        
-        // If an interrupt was serviced, return those cycles
+
         if (cycles > 0) {
             return cycles;
         }
 
         if (halted) {
-            executedCyclesThisStep = 4; // HALT consome ciclos como um NOP
+            executedCyclesThisStep = 4;
         } else if (stopped) {
-            // STOP mode: CPU is stopped, just consume cycles
             executedCyclesThisStep = 4;
         } else {
-            // Process EI delay: If EI was executed in the previous instruction,
-            // enable IME now (after one instruction delay)
             if (eiExecuted) {
                 ime = true;
                 eiExecuted = false;
             }
-            
+
             int opcode = fetch();
-            
-            // Verificar se o HALT bug foi ativado na execução anterior
+
             if (haltBugTriggered) {
-                // HALT bug: restaurar PC para executar a mesma instrução novamente
                 pc = (pc - 1) & 0xFFFF;
-                haltBugTriggered = false; // Reset do estado do bug após a primeira execução
+                haltBugTriggered = false;
             }
-            
-            decodeAndExecute(opcode); // Este método define this.cycles
-            executedCyclesThisStep = this.cycles; // Captura os ciclos da instrução executada
+
+            decodeAndExecute(opcode);
+            executedCyclesThisStep = this.cycles;
         }
 
         return executedCyclesThisStep;
@@ -212,24 +113,15 @@ public class CPU {
 
     private void decodeAndExecute(int opcode) {
         switch (opcode) {
-            // NOP
             case 0x00: cycles = 4; break;
 
-            // LD BC,d16
             case 0x01: setBC(fetchWord()); cycles = 12; break;
-            // LD (BC),A
             case 0x02: mmu.writeByte(getBC(), a); cycles = 8; break;
-            // INC BC
             case 0x03: setBC(getBC() + 1); cycles = 8; break;
-            // INC B
             case 0x04: b = inc8(b); cycles = 4; break;
-            // DEC B
             case 0x05: b = dec8(b); cycles = 4; break;
-            // LD B,d8
             case 0x06: b = fetch(); cycles = 8; break;
-            // RLCA
             case 0x07: rlca(); cycles = 4; break;
-            // LD (a16),SP
             case 0x08:
                 int addr = fetchWord();
                 mmu.writeByte(addr, sp & 0xFF);
@@ -237,158 +129,72 @@ public class CPU {
                 cycles = 20;
                 break;
 
-            // ADD HL,BC
             case 0x09: addHL(getBC()); cycles = 8; break;
-            // LD A,(BC)
             case 0x0A: a = mmu.readByte(getBC()); cycles = 8; break;
-            // DEC BC
             case 0x0B: setBC(getBC() - 1); cycles = 8; break;
-            // INC C
             case 0x0C: c = inc8(c); cycles = 4; break;
-            // DEC C
             case 0x0D: c = dec8(c); cycles = 4; break;
-            // LD C,d8
             case 0x0E: c = fetch(); cycles = 8; break;
-            // RRCA
             case 0x0F: rrca(); cycles = 4; break;
 
-            // STOP (0x10 0x00)
             case 0x10:
-                // STOP instruction: CPU stops until button press
-                // On CGB, this can also switch speeds
-                // Format: 0x10 0x00 (two bytes)
-                fetch(); // Consome o byte 0x00 que acompanha STOP
+                fetch();
                 stopped = true;
-                halted = false; // STOP is different from HALT
+                halted = false;
                 cycles = 4;
                 break;
 
 
-            // LD DE,d16
             case 0x11: setDE(fetchWord()); cycles = 12; break;
-            // LD (DE),A
             case 0x12: mmu.writeByte(getDE(), a); cycles = 8; break;
-            // INC DE
             case 0x13: setDE(getDE() + 1); cycles = 8; break;
-            // INC D
             case 0x14: d = inc8(d); cycles = 4; break;
-            // DEC D
             case 0x15: d = dec8(d); cycles = 4; break;
-            // LD D,d8
             case 0x16: d = fetch(); cycles = 8; break;
-            // RLA
             case 0x17: rla(); cycles = 4; break;
-            // JR r8
             case 0x18: jr_unconditional(); cycles = 12; break;
 
-            // ADD HL,DE
             case 0x19: addHL(getDE()); cycles = 8; break;
-            // LD A,(DE)
             case 0x1A: a = mmu.readByte(getDE()); cycles = 8; break;
-            // DEC DE
             case 0x1B: setDE(getDE() - 1); cycles = 8; break;
-            // INC E
             case 0x1C: e = inc8(e); cycles = 4; break;
-            // DEC E
             case 0x1D: e = dec8(e); cycles = 4; break;
-            // LD E,d8
             case 0x1E: e = fetch(); cycles = 8; break;
-            // RRA
             case 0x1F: rra(); cycles = 4; break;
 
-            // ========================================================================
-            // CONDITIONAL BRANCHES - CYCLE-ACCURATE TIMING
-            // ========================================================================
-            // Conditional jumps/calls/returns have different cycle counts based on
-            // whether the condition is met (branch taken) or not (branch not taken).
-            //
-            // JR cc,r8 (relative jump):
-            //   - Taken: 12 cycles (3 M-cycles) - fetch opcode, fetch offset, perform jump
-            //   - Not taken: 8 cycles (2 M-cycles) - fetch opcode, fetch offset
-            //
-            // JP cc,a16 (absolute jump):
-            //   - Taken: 16 cycles (4 M-cycles) - fetch opcode, fetch addr low, fetch addr high, perform jump
-            //   - Not taken: 12 cycles (3 M-cycles) - fetch opcode, fetch addr low, fetch addr high
-            //
-            // CALL cc,a16:
-            //   - Taken: 24 cycles (6 M-cycles) - fetch opcode, fetch addr, push PC high, push PC low, jump
-            //   - Not taken: 12 cycles (3 M-cycles) - fetch opcode, fetch addr low, fetch addr high
-            //
-            // RET cc:
-            //   - Taken: 20 cycles (5 M-cycles) - fetch opcode, internal delay, pop PC low, pop PC high, jump
-            //   - Not taken: 8 cycles (2 M-cycles) - fetch opcode, check condition
-            //
-            // This timing is critical for:
-            // - Demo scene effects that rely on precise timing
-            // - Games using timing loops
-            // - Sound synchronization
-            // ========================================================================
             
-            // JR NZ,r8 - Jump relative if Zero flag is not set
-            // JR NZ,r8 - Jump relative if Zero flag is not set
             case 0x20: if (!getZeroFlag()) { jr_unconditional(); cycles = 12; } else { fetch(); cycles = 8; } break;
-            // LD HL,d16
             case 0x21: setHL(fetchWord()); cycles = 12; break;
-            // LD (HL+),A ou LDI (HL),A
             case 0x22: mmu.writeByte(getHL(), a); setHL(getHL() + 1); cycles = 8; break;
-            // INC HL
             case 0x23: setHL(getHL() + 1); cycles = 8; break;
-            // INC H
             case 0x24: h = inc8(h); cycles = 4; break;
-            // DEC H
             case 0x25: h = dec8(h); cycles = 4; break;
-            // LD H,d8
             case 0x26: h = fetch(); cycles = 8; break;
-            // DAA
             case 0x27: daa(); cycles = 4; break;
-            // JR Z,r8 - Jump relative if Zero flag is set
             case 0x28: if (getZeroFlag()) { jr_unconditional(); cycles = 12; } else { fetch(); cycles = 8; } break;
-            // ADD HL,HL
             case 0x29: addHL(getHL()); cycles = 8; break;
-            // LD A,(HL+) ou LDI A,(HL)
             case 0x2A: a = mmu.readByte(getHL()); setHL(getHL() + 1); cycles = 8; break;
-            // DEC HL
             case 0x2B: setHL(getHL() - 1); cycles = 8; break;
-            // INC L
             case 0x2C: l = inc8(l); cycles = 4; break;
-            // DEC L
             case 0x2D: l = dec8(l); cycles = 4; break;
-            // LD L,d8
             case 0x2E: l = fetch(); cycles = 8; break;
-            // CPL
             case 0x2F: cpl(); cycles = 4; break;
 
-            // JR NC,r8 - Jump relative if Carry flag is not set
             case 0x30: if (!getCarryFlag()) { jr_unconditional(); cycles = 12; } else { fetch(); cycles = 8; } break;
-            // LD SP,d16
             case 0x31: sp = fetchWord(); cycles = 12; break;
-            // LD (HL-),A ou LDD (HL),A
             case 0x32: mmu.writeByte(getHL(), a); setHL(getHL() - 1); cycles = 8; break;
-            // INC SP
             case 0x33: sp = (sp + 1) & 0xFFFF; cycles = 8; break;
-            // INC (HL)
             case 0x34: int valHL = mmu.readByte(getHL()); mmu.writeByte(getHL(), inc8(valHL)); cycles = 12; break;
-            // DEC (HL)
             case 0x35: valHL = mmu.readByte(getHL()); mmu.writeByte(getHL(), dec8(valHL)); cycles = 12; break;
-            // LD (HL),d8
             case 0x36: mmu.writeByte(getHL(), fetch()); cycles = 12; break;
-            // SCF
             case 0x37: scf(); cycles = 4; break;
-            // JR C,r8 - Jump relative if Carry flag is set
             case 0x38: if (getCarryFlag()) { jr_unconditional(); cycles = 12; } else { fetch(); cycles = 8; } break;
-            // ADD HL,SP
             case 0x39: addHL(sp); cycles = 8; break;
-            // LD A,(HL-) ou LDD A,(HL)
             case 0x3A: a = mmu.readByte(getHL()); setHL(getHL() - 1); cycles = 8; break;
-            // DEC SP
             case 0x3B: sp = (sp - 1) & 0xFFFF; cycles = 8; break;
-            // INC A
             case 0x3C: a = inc8(a); cycles = 4; break;
-            // DEC A
             case 0x3D: a = dec8(a); cycles = 4; break;
-            // LD A,d8
             case 0x3E: a = fetch(); cycles = 8; break;
-            // CCF
             case 0x3F: ccf(); cycles = 4; break;
 
             case 0x40: /* LD B,B */ cycles = 4; break;
@@ -451,7 +257,6 @@ public class CPU {
             case 0x73: mmu.writeByte(getHL(), e); cycles = 8; break;
             case 0x74: mmu.writeByte(getHL(), h); cycles = 8; break;
             case 0x75: mmu.writeByte(getHL(), l); cycles = 8; break;
-            // HALT - Implementação do HALT bug
             case 0x76: 
                 executeHalt();
                 cycles = 4; 
@@ -539,50 +344,27 @@ public class CPU {
             case 0xBE: cpA(mmu.readByte(getHL())); cycles = 8; break;
             case 0xBF: cpA(a); cycles = 4; break;
 
-            // ========================================================================
-            // CONDITIONAL JP, CALL, RET - CYCLE-ACCURATE TIMING
-            // ========================================================================
             
-            // RET NZ - Return if Zero flag is not set (taken: 20, not taken: 8)
-            // RET NZ - Return if Zero flag is not set (taken: 20, not taken: 8)
             case 0xC0: if (!getZeroFlag()) { ret(); cycles = 20; } else { cycles = 8; } break;
-            // POP BC
             case 0xC1: setBC(popWord()); cycles = 12; break;
-            // JP NZ,a16 - Jump absolute if Zero flag is not set (taken: 16, not taken: 12)
             case 0xC2: if (!getZeroFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
-            // JP a16
             case 0xC3: jp_unconditional(); cycles = 16; break;
-            // CALL NZ,a16 - Call if Zero flag is not set (taken: 24, not taken: 12)
             case 0xC4: if (!getZeroFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
-            // PUSH BC
             case 0xC5: pushWord(getBC()); cycles = 16; break;
-            // ADD A,d8
             case 0xC6: addA(fetch()); cycles = 8; break;
-            // RST 00H
             case 0xC7: rst(0x00); cycles = 16; break;
 
-            // RET Z - Return if Zero flag is set (taken: 20, not taken: 8)
             case 0xC8: if (getZeroFlag()) { ret(); cycles = 20; } else { cycles = 8; } break;
-            // RET
             case 0xC9: ret(); cycles = 16; break;
-            // JP Z,a16 - Jump absolute if Zero flag is set (taken: 16, not taken: 12)
             case 0xCA: if (getZeroFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
-            // CB prefix
             case 0xCB: decodeCB(); break;
-            // CALL Z,a16 - Call if Zero flag is set (taken: 24, not taken: 12)
             case 0xCC: if (getZeroFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
-            // CALL a16
             case 0xCD: call_unconditional(); cycles = 24; break;
-            // ADC A,d8
             case 0xCE: adcA(fetch()); cycles = 8; break;
-            // RST 08H
             case 0xCF: rst(0x08); cycles = 16; break;
 
-            // RET NC - Return if Carry flag is not set (taken: 20, not taken: 8)
             case 0xD0: if (!getCarryFlag()) { ret(); cycles = 20; } else { cycles = 8; } break;
-            // POP DE
             case 0xD1: setDE(popWord()); cycles = 12; break;
-            // JP NC,a16 - Jump absolute if Carry flag is not set (taken: 16, not taken: 12)
             case 0xD2: if (!getCarryFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
             case 0xD3:
                 if (debugUndocumentedOpcodes) {
@@ -591,20 +373,13 @@ public class CPU {
                 fetch(); // Consome o byte imediato, mas não faz nada com ele
                 cycles = 8; 
                 break;
-            // CALL NC,a16 - Call if Carry flag is not set (taken: 24, not taken: 12)
             case 0xD4: if (!getCarryFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
-            // PUSH DE
             case 0xD5: pushWord(getDE()); cycles = 16; break;
-            // SUB A,d8
             case 0xD6: subA(fetch()); cycles = 8; break;
-            // RST 10H
             case 0xD7: rst(0x10); cycles = 16; break;
 
-            // RET C - Return if Carry flag is set (taken: 20, not taken: 8)
             case 0xD8: if (getCarryFlag()) { ret(); cycles = 20; } else { cycles = 8; } break;
-            // RETI
             case 0xD9: ret(); ime = true; cycles = 16; break;
-            // JP C,a16 - Jump absolute if Carry flag is set (taken: 16, not taken: 12)
             case 0xDA: if (getCarryFlag()) { jp_unconditional(); cycles = 16; } else { fetchWord(); cycles = 12; } break;
 
             case 0xDB:
@@ -614,22 +389,16 @@ public class CPU {
                 fetch(); // Consome o byte imediato, mas não faz nada com ele
                 cycles = 8; 
                 break;
-            // CALL C,a16 - Call if Carry flag is set (taken: 24, not taken: 12)
             case 0xDC: if (getCarryFlag()) { call_unconditional(); cycles = 24; } else { fetchWord(); cycles = 12; } break;
 
             case 0xDD:
                 cycles = 8;
                 break;
-            // SBC A,d8
             case 0xDE: sbcA(fetch()); cycles = 8; break;
-            // RST 18H
             case 0xDF: rst(0x18); cycles = 16; break;
 
-            // LDH (a8),A  -> LD (0xFF00+a8),A
             case 0xE0: mmu.writeByte(0xFF00 + fetch(), a); cycles = 12; break;
-            // POP HL
             case 0xE1: setHL(popWord()); cycles = 12; break;
-            // LD (C),A -> LD (0xFF00+C),A
             case 0xE2: mmu.writeByte(0xFF00 + (c & 0xFF), a); cycles = 8; break;
            
             case 0xE3: 
@@ -638,20 +407,14 @@ public class CPU {
                 break;
             case 0xE4:
                 
-                fetch(); // Consome o byte imediato
+                fetch();
                 cycles = 8; 
                 break;
-            // PUSH HL
             case 0xE5: pushWord(getHL()); cycles = 16; break;
-            // AND A,d8
             case 0xE6: andA(fetch()); cycles = 8; break;
-            // RST 20H
             case 0xE7: rst(0x20); cycles = 16; break;
-            // ADD SP,r8 (signed)
             case 0xE8: addSP_r8(); cycles = 16; break;
-            // JP HL
             case 0xE9: pc = getHL(); cycles = 4; break;
-            // LD (a16),A
             case 0xEA: mmu.writeByte(fetchWord(), a); cycles = 16; break;
            
             case 0xEB: 
@@ -666,39 +429,24 @@ public class CPU {
             case 0xED:
                 cycles = 8; 
                 break;
-            // XOR A,d8
             case 0xEE: xorA(fetch()); cycles = 8; break;
-            // RST 28H
             case 0xEF: rst(0x28); cycles = 16; break;
 
-            // LDH A,(a8) -> LD A,(0xFF00+a8)
             case 0xF0: a = mmu.readByte(0xFF00 + fetch()); cycles = 12; break;
-            // POP AF
             case 0xF1: setAF(popWord()); cycles = 12; break;
-            // LD A,(C) -> LD A,(0xFF00+C)
             case 0xF2: a = mmu.readByte(0xFF00 + (c & 0xFF)); cycles = 8; break;
-            // DI
             case 0xF3: ime = false; cycles = 4; break;
             case 0xF4:
                 fetchWord(); 
                 cycles = 12; 
                 break;
-            // PUSH AF
             case 0xF5: pushWord(getAF()); cycles = 16; break;
-            // OR A,d8
             case 0xF6: orA(fetch()); cycles = 8; break;
-            // RST 30H
             case 0xF7: rst(0x30); cycles = 16; break;
-            // LD HL,SP+r8 (signed)
             case 0xF8: ldHL_SP_r8(); cycles = 12; break;
-            // LD SP,HL
             case 0xF9: sp = getHL(); cycles = 8; break;
-            // LD A,(a16)
             case 0xFA: a = mmu.readByte(fetchWord()); cycles = 16; break;
-            // EI - Enable Interrupts (with 1 instruction delay)
             case 0xFB: 
-                // EI has a 1-instruction delay before IME is actually enabled
-                // This allows for patterns like: EI; RET to work correctly
                 eiExecuted = true; 
                 cycles = 4; 
                 break;
@@ -709,9 +457,7 @@ public class CPU {
             case 0xFD:
                 cycles = 8; 
                 break;
-            // CP A,d8
             case 0xFE: cpA(fetch()); cycles = 8; break;
-            // RST 38H
             case 0xFF: rst(0x38); cycles = 16; break;
 
 
@@ -725,11 +471,10 @@ public class CPU {
 
     private void decodeCB() {
         int cbOpcode = fetch();
-        cycles = 8; // A maioria das instruções CB leva 8 ciclos, exceto as (HL) que levam mais
-
+        cycles = 8; 
         switch (cbOpcode & 0xF0) {
-            case 0x00: // RLC r, RRC r
-                if ((cbOpcode & 0x08) == 0) { // RLC
+            case 0x00:
+                if ((cbOpcode & 0x08) == 0) { 
                     switch (cbOpcode & 0x07) {
                         case 0x0: b = rlc(b); break;
                         case 0x1: c = rlc(c); break;
@@ -740,7 +485,7 @@ public class CPU {
                         case 0x6: mmu.writeByte(getHL(), rlc(mmu.readByte(getHL()))); cycles = 16; break;
                         case 0x7: a = rlc(a); break;
                     }
-                } else { // RRC
+                } else { 
                     switch (cbOpcode & 0x07) {
                         case 0x0: b = rrc(b); break;
                         case 0x1: c = rrc(c); break;
@@ -753,8 +498,8 @@ public class CPU {
                     }
                 }
                 break;
-            case 0x10: // RL r, RR r
-                if ((cbOpcode & 0x08) == 0) { // RL
+            case 0x10: 
+                if ((cbOpcode & 0x08) == 0) { 
                     switch (cbOpcode & 0x07) {
                         case 0x0: b = rl(b); break;
                         case 0x1: c = rl(c); break;
@@ -765,7 +510,7 @@ public class CPU {
                         case 0x6: mmu.writeByte(getHL(), rl(mmu.readByte(getHL()))); cycles = 16; break;
                         case 0x7: a = rl(a); break;
                     }
-                } else { // RR
+                } else { 
                     switch (cbOpcode & 0x07) {
                         case 0x0: b = rr(b); break;
                         case 0x1: c = rr(c); break;
@@ -778,7 +523,7 @@ public class CPU {
                     }
                 }
                 break;
-            case 0x20: // SLA r, SRA r
+            case 0x20: 
                 if ((cbOpcode & 0x08) == 0) { // SLA
                     switch (cbOpcode & 0x07) {
                         case 0x0: b = sla(b); break;
@@ -790,7 +535,7 @@ public class CPU {
                         case 0x6: mmu.writeByte(getHL(), sla(mmu.readByte(getHL()))); cycles = 16; break;
                         case 0x7: a = sla(a); break;
                     }
-                } else { // SRA
+                } else { 
                     switch (cbOpcode & 0x07) {
                         case 0x0: b = sra(b); break;
                         case 0x1: c = sra(c); break;
@@ -803,7 +548,7 @@ public class CPU {
                     }
                 }
                 break;
-            case 0x30: // SWAP r, SRL r
+            case 0x30: 
                 if ((cbOpcode & 0x08) == 0) { // SWAP
                     switch (cbOpcode & 0x07) {
                         case 0x0: b = swap(b); break;
@@ -815,7 +560,7 @@ public class CPU {
                         case 0x6: mmu.writeByte(getHL(), swap(mmu.readByte(getHL()))); cycles = 16; break;
                         case 0x7: a = swap(a); break;
                     }
-                } else { // SRL
+                } else {
                     switch (cbOpcode & 0x07) {
                         case 0x0: b = srl(b); break;
                         case 0x1: c = srl(c); break;
@@ -828,7 +573,6 @@ public class CPU {
                     }
                 }
                 break;
-            // BIT b,r
             case 0x40: case 0x50: case 0x60: case 0x70:
                 int bit = (cbOpcode >> 3) & 0x07;
                 int regVal = 0;
@@ -844,9 +588,8 @@ public class CPU {
                     case 0x7: regVal = a; break;
                 }
                 bitTest(regVal, bit);
-                cycles = fromHL ? 12 : 8; // BIT (HL) is 12 cycles
+                cycles = fromHL ? 12 : 8; 
                 break;
-            // RES b,r
             case 0x80: case 0x90: case 0xA0: case 0xB0:
                 bit = (cbOpcode >> 3) & 0x07;
                 switch (cbOpcode & 0x07) {
@@ -860,7 +603,6 @@ public class CPU {
                     case 0x7: a = res(a, bit); break;
                 }
                 break;
-            // SET b,r
             case 0xC0: case 0xD0: case 0xE0: case 0xF0:
                 bit = (cbOpcode >> 3) & 0x07;
                 switch (cbOpcode & 0x07) {
@@ -882,7 +624,6 @@ public class CPU {
         }
     }
 
-    // --- Métodos de Registradores ---
     private int getAF() { return (a << 8) | (f & 0xF0); }
     private void setAF(int val) { a = (val >> 8) & 0xFF; f = val & 0xF0; }
 
@@ -895,7 +636,6 @@ public class CPU {
     private int getHL() { return (h << 8) | l; }
     private void setHL(int val) { h = (val >> 8) & 0xFF; l = val & 0xFF; }
 
-    // --- Métodos de Flags ---
     private void setZeroFlag(boolean set) { f = set ? (f | ZERO_FLAG) : (f & ~ZERO_FLAG); }
     private boolean getZeroFlag() { return (f & ZERO_FLAG) != 0; }
 
@@ -908,7 +648,6 @@ public class CPU {
     private void setCarryFlag(boolean set) { f = set ? (f | CARRY_FLAG) : (f & ~CARRY_FLAG); }
     private boolean getCarryFlag() { return (f & CARRY_FLAG) != 0; }
 
-    // --- Lógica de Instruções (exemplos) ---
     private int inc8(int val) {
         int result = (val + 1) & 0xFF;
         setZeroFlag(result == 0);
@@ -1257,46 +996,7 @@ public class CPU {
     }
 
 
-    /**
-     * Handle interrupt processing with cycle-accurate timing.
-     * 
-     * INTERRUPT TIMING AND BEHAVIOR:
-     * 
-     * 1. WHEN ARE INTERRUPTS CHECKED?
-     *    - Interrupts are checked BEFORE fetching the next instruction
-     *    - NOT checked during instruction execution (instructions are atomic)
-     *    - This is why handleInterrupts() is called at the start of step()
-     * 
-     * 2. INTERRUPT PRIORITY (highest to lowest):
-     *    - V-Blank (bit 0, 0x40) - Triggered at start of VBlank (line 144)
-     *    - LCD STAT (bit 1, 0x48) - Triggered by PPU mode changes
-     *    - Timer (bit 2, 0x50) - Triggered by TIMA overflow
-     *    - Serial (bit 3, 0x58) - Triggered by serial transfer complete
-     *    - Joypad (bit 4, 0x60) - Triggered by button press
-     * 
-     * 3. HALT WAKE-UP BEHAVIOR:
-     *    - If CPU is HALTed, any enabled interrupt wakes it (even if IME=0)
-     *    - If IME=0, CPU wakes but doesn't service the interrupt
-     *    - If IME=1, CPU wakes AND services the interrupt
-     * 
-     * 4. INTERRUPT SERVICING (when IME=1):
-     *    - IME is disabled (to prevent nested interrupts)
-     *    - IF flag for this interrupt is cleared
-     *    - PC is pushed onto stack (2 M-cycles)
-     *    - PC is set to interrupt vector (1 M-cycle)
-     *    - Total: 20 T-cycles (5 M-cycles)
-     * 
-     * 5. EI DELAY:
-     *    - If an interrupt occurs during the 1-instruction delay after EI,
-     *      the eiExecuted flag is cancelled to prevent IME being re-enabled
-     * 
-     * CYCLE TIMING:
-     * - If interrupt is serviced: cycles = 20 (returned by step())
-     * - If no interrupt: cycles = 0 (normal instruction will execute)
-     */
     public void handleInterrupts() {
-        // Check if any interrupt should be processed
-        // IME must be enabled OR CPU must be halted for wake-up
         if (!ime && !halted) {
             return;
         }
@@ -1310,22 +1010,16 @@ public class CPU {
             return;
         }
 
-        // Wake from HALT even if IME is disabled
         halted = false;
 
-        // If IME is disabled, we wake from HALT but don't service the interrupt
         if (!ime) {
             return;
         }
 
-        // Disable IME before servicing interrupt
         ime = false;
         
-        // Cancel any pending EI execution since we're handling an interrupt
         eiExecuted = false;
 
-        // Service the highest priority interrupt (lowest bit set)
-        // Priority order: V-Blank > LCD STAT > Timer > Serial > Joypad
         if ((requestedAndEnabled & 0x01) != 0) { 
             mmu.writeByte(0xFF0F, IF & ~0x01);
             rst(0x0040);
@@ -1349,10 +1043,6 @@ public class CPU {
         }
     }
     
-    /**
-     * Wake CPU from STOP mode.
-     * Called when a button is pressed while in STOP mode.
-     */
     public void wakeFromStop() {
         if (stopped) {
             stopped = false;
@@ -1364,26 +1054,14 @@ public class CPU {
         return halted;
     }
     
-    /**
-     * Obtém o valor atual do Program Counter (PC).
-     * @return valor atual do PC
-     */
     public int getPC() {
         return pc;
     }
     
-    /**
-     * Define o estado do Interrupt Master Enable (IME) para testes.
-     * @param enable true para habilitar interrupções, false para desabilitar
-     */
     public void setIME(boolean enable) {
         this.ime = enable;
     }
     
-    /**
-     * Obtém o estado atual do Interrupt Master Enable (IME).
-     * @return true se interrupções estão habilitadas, false caso contrário
-     */
     public boolean getIME() {
         return ime;
     }

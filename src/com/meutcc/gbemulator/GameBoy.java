@@ -15,11 +15,8 @@ public class GameBoy {
         this.ppu = new PPU();
         this.apu = new APU();
         this.mmu = new MMU(cartridge, ppu, apu);
-        this.cpu = new CPU(mmu); // CPU agora passa a referência da MMU
-        
-        // Set CPU reference in MMU for STOP mode wake-up
+        this.cpu = new CPU(mmu);
         this.mmu.setCpu(cpu);
-
         this.ppu.setMmu(mmu);
         if (this.apu != null) {
             this.apu.setEmulatorSoundGloballyEnabled(this.emulatorSoundGloballyEnabled);
@@ -51,29 +48,21 @@ public class GameBoy {
     public int step() {
         int cycles;
 
-        // Verifica se uma transferência DMA está em andamento.
         if (mmu.isDmaActive()) {
-            // A CPU está paralisada. Nenhum passo da CPU é executado.
-            // Apenas avançamos o tempo para os outros componentes.
-            // Usamos 4 ciclos (equivalente a um NOP) como unidade de tempo.
             cycles = 4;
-            mmu.updateDma(cycles); // Decrementa o contador de ciclos do DMA.
+            mmu.updateDma(cycles);
         } else {
             cycles = cpu.step();
             if (cycles == -1) return -1;
         }
 
         ppu.update(cycles);
-        mmu.updateTimers(cycles); // <-- Você já tem isso, ótimo!
-
-        cartridge.update(cycles); // Para atualizar lógicas internas do cartucho, como o RTC
+        mmu.updateTimers(cycles);
+        cartridge.update(cycles);
 
         if (this.emulatorSoundGloballyEnabled && apu != null) {
             apu.update(cycles);
         }
-
-        // A chamada a handleInterrupts foi movida para dentro do CPU.step() na sua versão, mantenha assim.
-        // cpu.handleInterrupts(); <-- Se estiver aqui, pode remover. Se estiver no CPU.step(), está ok.
 
         return cycles;
     }
@@ -105,22 +94,13 @@ public class GameBoy {
         return cartridge;
     }
     
-    // ========================================================================
-    // SAVE/LOAD STATE
-    // ========================================================================
-    
-    /**
-     * Salva o estado atual do emulador em um arquivo
-     */
     public void saveState(String filePath) throws IOException {
         try (DataOutputStream dos = new DataOutputStream(
                 new BufferedOutputStream(new FileOutputStream(filePath)))) {
             
-            // Header
-            dos.writeInt(0x47425353); // "GBSS" - GameBoy Save State
-            dos.writeInt(1); // Versão
+            dos.writeInt(0x47425353);
+            dos.writeInt(1);
             
-            // CPU State
             dos.writeInt(cpu.getA());
             dos.writeInt(cpu.getB());
             dos.writeInt(cpu.getC());
@@ -134,7 +114,6 @@ public class GameBoy {
             dos.writeBoolean(cpu.getIME());
             dos.writeBoolean(cpu.isHalted());
             
-            // MMU/PPU/APU states serão salvos pelos respectivos componentes
             mmu.saveState(dos);
             ppu.saveState(dos);
             apu.saveState(dos);
@@ -143,14 +122,10 @@ public class GameBoy {
         }
     }
     
-    /**
-     * Carrega um estado salvo de um arquivo
-     */
     public void loadState(String filePath) throws IOException {
         try (DataInputStream dis = new DataInputStream(
                 new BufferedInputStream(new FileInputStream(filePath)))) {
             
-            // Header
             int magic = dis.readInt();
             if (magic != 0x47425353) {
                 throw new IOException("Arquivo de save state inválido");
@@ -161,7 +136,6 @@ public class GameBoy {
                 throw new IOException("Versão de save state não suportada: " + version);
             }
             
-            // CPU State
             cpu.setA(dis.readInt());
             cpu.setB(dis.readInt());
             cpu.setC(dis.readInt());
@@ -175,7 +149,6 @@ public class GameBoy {
             cpu.setIME(dis.readBoolean());
             cpu.setHalted(dis.readBoolean());
             
-            // MMU/PPU/APU states
             mmu.loadState(dis);
             ppu.loadState(dis);
             apu.loadState(dis);

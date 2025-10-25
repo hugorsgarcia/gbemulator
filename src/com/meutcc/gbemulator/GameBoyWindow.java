@@ -11,8 +11,6 @@ public class GameBoyWindow extends JFrame {
     private static final int SCREEN_HEIGHT = 144;
     private static final int DEFAULT_SCALE = 3;
     private static final int MIN_SCALE = 1;
-    
-    // Proporção do Game Boy: 160:144 = 10:9
     private static final double ASPECT_RATIO = (double) SCREEN_WIDTH / SCREEN_HEIGHT;
 
     private final GameBoyScreenPanel screenPanel;
@@ -22,19 +20,16 @@ public class GameBoyWindow extends JFrame {
     private volatile boolean paused = false;
     private final InputHandler inputHandler;
 
-    // Flag para controlar o estado global do som do emulador
     private boolean globalSoundEnabled = true;
 
     public GameBoyWindow() {
         setTitle("GameBoy Emulator TCC");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setResizable(true); // MUDADO: Agora é redimensionável
-
+        setResizable(true);
 
         gameBoy = new GameBoy();
         gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
         inputHandler = new InputHandler(gameBoy.getMmu());
-
 
         screenPanel = new GameBoyScreenPanel();
         add(screenPanel, BorderLayout.CENTER);
@@ -56,7 +51,6 @@ public class GameBoyWindow extends JFrame {
         loadStateItem.addActionListener(e -> loadState());
         fileMenu.add(loadStateItem);
         
-        // Adicionar opção de tamanho de janela
         JMenu windowMenu = new JMenu("Janela");
         for (int scale = 1; scale <= 6; scale++) {
             final int currentScale = scale;
@@ -86,7 +80,6 @@ public class GameBoyWindow extends JFrame {
         menuBar.add(soundMenu);
         setJMenuBar(menuBar);
         
-        // Adicionar listeners para pausar quando menu for aberto
         addMenuPauseListeners(fileMenu);
         addMenuPauseListeners(windowMenu);
         addMenuPauseListeners(controlMenu);
@@ -95,12 +88,9 @@ public class GameBoyWindow extends JFrame {
         addKeyListener(inputHandler);
         setFocusable(true);
         pack();
-        setLocationRelativeTo(null); // Centralizar
+        setLocationRelativeTo(null);
     }
     
-    /**
-     * Adiciona listeners a um menu para pausar a emulação quando aberto
-     */
     private void addMenuPauseListeners(JMenu menu) {
         menu.addMenuListener(new javax.swing.event.MenuListener() {
             @Override
@@ -120,9 +110,6 @@ public class GameBoyWindow extends JFrame {
         });
     }
     
-    /**
-     * Pausa a emulação temporariamente
-     */
     private void pauseEmulation() {
         if (running && !paused) {
             paused = true;
@@ -130,16 +117,12 @@ public class GameBoyWindow extends JFrame {
         }
     }
     
-    /**
-     * Resume a emulação
-     */
     private void resumeEmulation() {
         if (running && paused) {
             paused = false;
             System.out.println("Emulação resumida");
         }
     }
-
 
     private void openRomChooser() {
         JFileChooser fileChooser = new JFileChooser(".");
@@ -176,10 +159,9 @@ public class GameBoyWindow extends JFrame {
     }
 
     private void setWindowSize(int scale) {
-        // Define o tamanho da janela baseado na escala
         screenPanel.setPreferredSize(new Dimension(SCREEN_WIDTH * scale, SCREEN_HEIGHT * scale));
         pack();
-        setLocationRelativeTo(null); // Recentra a janela
+        setLocationRelativeTo(null);
     }
 
     private void saveState() {
@@ -247,11 +229,10 @@ public class GameBoyWindow extends JFrame {
 
 
     public void loadROM(String romPath) {
-        // Interrompe a emulação antiga antes de carregar uma nova ROM
         if (emulationThread != null && emulationThread.isAlive()) {
             running = false;
             try {
-                emulationThread.join(500); // Espera um pouco para a thread terminar
+                emulationThread.join(500);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 System.err.println("Thread de emulação interrompida durante troca de ROM.");
@@ -269,16 +250,14 @@ public class GameBoyWindow extends JFrame {
     }
 
     private void startEmulation() {
-        // Certifique-se de que qualquer emulação anterior parou completamente
         if (emulationThread != null && emulationThread.isAlive()) {
             running = false;
             try {
-                emulationThread.join(500); // Espera pela thread anterior
+                emulationThread.join(500);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
-
 
         if (gameBoy != null) {
             gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
@@ -286,7 +265,7 @@ public class GameBoyWindow extends JFrame {
 
         running = true;
         emulationThread = new Thread(this::emulationLoop);
-        emulationThread.setName("EmulationThread"); // Bom para depuração
+        emulationThread.setName("EmulationThread");
         emulationThread.start();
     }
 
@@ -391,7 +370,7 @@ public class GameBoyWindow extends JFrame {
                 emulationThread.join(1000);
                 if (emulationThread.isAlive()){
                     System.out.println("Emulation thread did not stop in time, interrupting.");
-                    emulationThread.interrupt(); // Tenta interromper se não parou
+                    emulationThread.interrupt();
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -399,7 +378,6 @@ public class GameBoyWindow extends JFrame {
             }
         }
 
-        // Chama o close da APU através do GameBoy
         if (gameBoy != null && gameBoy.getApu() != null) {
             System.out.println("Closing APU resources...");
             gameBoy.getApu().close();
@@ -415,7 +393,6 @@ public class GameBoyWindow extends JFrame {
         private BufferedImage screenBuffer;
 
         public GameBoyScreenPanel() {
-            // Tamanho inicial 3x
             setPreferredSize(new Dimension(SCREEN_WIDTH * DEFAULT_SCALE, SCREEN_HEIGHT * DEFAULT_SCALE));
             setMinimumSize(new Dimension(SCREEN_WIDTH * MIN_SCALE, SCREEN_HEIGHT * MIN_SCALE));
             setBackground(Color.BLACK);
@@ -442,7 +419,6 @@ public class GameBoyWindow extends JFrame {
             
             Graphics2D g2d = (Graphics2D) g;
             
-            // Desabilita interpolação para manter pixels nítidos (pixel perfect)
             g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
             g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
             g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
@@ -450,30 +426,23 @@ public class GameBoyWindow extends JFrame {
             int panelWidth = getWidth();
             int panelHeight = getHeight();
             
-            // Calcula o maior tamanho inteiro que mantém a proporção 10:9 (160:144)
-            // e cabe dentro do painel
             int scaledWidth, scaledHeight;
             
-            // Tenta ajustar pela largura
             scaledWidth = panelWidth;
             scaledHeight = (int) (panelWidth / ASPECT_RATIO);
             
-            // Se a altura calculada for maior que o painel, ajusta pela altura
             if (scaledHeight > panelHeight) {
                 scaledHeight = panelHeight;
                 scaledWidth = (int) (panelHeight * ASPECT_RATIO);
             }
             
-            // Pixel perfect: arredonda para múltiplos inteiros da resolução original
             int scale = Math.max(1, Math.min(scaledWidth / SCREEN_WIDTH, scaledHeight / SCREEN_HEIGHT));
             scaledWidth = SCREEN_WIDTH * scale;
             scaledHeight = SCREEN_HEIGHT * scale;
             
-            // Centraliza a imagem no painel
             int x = (panelWidth - scaledWidth) / 2;
             int y = (panelHeight - scaledHeight) / 2;
             
-            // Desenha a imagem escalada
             g2d.drawImage(screenBuffer, x, y, scaledWidth, scaledHeight, null);
         }
     }

@@ -10,7 +10,7 @@ public class Cartridge {
     private MemoryBankController mbc;
 
     public Cartridge() {
-        // Inicializa com um MBC "nulo" que não faz nada.
+        
         this.mbc = new Mbc0RomOnly(new byte[0]);
     }
 
@@ -35,7 +35,7 @@ public class Cartridge {
 
         } catch (IOException e) {
             System.err.println("Erro ao carregar ROM: " + e.getMessage());
-            this.mbc = new Mbc0RomOnly(new byte[0]); // Retorna ao estado nulo
+            this.mbc = new Mbc0RomOnly(new byte[0]); 
             return false;
         }
     }
@@ -55,33 +55,33 @@ public class Cartridge {
 
         switch (mbcTypeCode) {
             case 0x00:
-            case 0x08: // ROM+RAM
-            case 0x09: // ROM+RAM+BATTERY
+            case 0x08: 
+            case 0x09: 
                 return new Mbc0RomOnly(romData);
-            case 0x01: // MBC1
-            case 0x02: // MBC1+RAM
-            case 0x03: // MBC1+RAM+BATTERY
+            case 0x01: 
+            case 0x02: 
+            case 0x03: 
                 return new MBC1(romData, ramSizeCode);
 
-            // --- NOVAS ENTRADAS AQUI ---
-            case 0x05: // MBC2
-            case 0x06: // MBC2+BATTERY
+            
+            case 0x05: 
+            case 0x06: 
                 return new MBC2(romData);
 
-            case 0x0F: // MBC3+TIMER+BATTERY
-            case 0x10: // MBC3+TIMER+RAM+BATTERY
-            case 0x11: // MBC3
-            case 0x12: // MBC3+RAM
-            case 0x13: // MBC3+RAM+BATTERY
+            case 0x0F: 
+            case 0x10: 
+            case 0x11: 
+            case 0x12: 
+            case 0x13: 
                 return new MBC3(romData, ramSizeCode);
 
-            case 0x19: // MBC5
-            case 0x1A: // MBC5+RAM
-            case 0x1B: // MBC5+RAM+BATTERY
-            case 0x1C: // MBC5+RUMBLE
-            case 0x1D: // MBC5+RUMBLE+RAM
-            case 0x1E: // MBC5+RUMBLE+RAM+BATTERY
-                return new MBC5(romData, ramSizeCode); // Lógica de Rumble não implementada
+            case 0x19: 
+            case 0x1A: 
+            case 0x1B: 
+            case 0x1C: 
+            case 0x1D: 
+            case 0x1E: 
+                return new MBC5(romData, ramSizeCode); 
 
             default:
                 System.err.println("AVISO: Tipo de MBC 0x" + Integer.toHexString(mbcTypeCode) + " não suportado. Tratando como ROM Only.");
@@ -114,9 +114,8 @@ class MBC2 extends AbstractMBC {
     private int romBank = 1;
 
     public MBC2(byte[] romData) {
-        // MBC2 usa 512x4 bits de RAM interna, vamos alocar 256 bytes (512 nibbles)
-        super(romData, 0x01); // 0x01 é um código inválido de RAM, mas alocamos manualmente
-        this.ramData = new byte[512]; // 512 nibbles = 256 bytes, mas endereçamos até 511
+        super(romData, 0x01);
+        this.ramData = new byte[512];
         Arrays.fill(this.ramData, (byte) 0xFF);
         System.out.println("RAM Interna do MBC2 alocada: 512x4 bits.");
     }
@@ -137,8 +136,8 @@ class MBC2 extends AbstractMBC {
     @Override
     public void write(int address, byte value) {
         if (address >= 0x0000 && address <= 0x3FFF) {
-            // Bit 8 do endereço determina a função
-            if ((address & 0x0100) == 0) { // Bit 8 = 0 -> RAM Enable
+           
+            if ((address & 0x0100) == 0) {
                 ramEnabled = (value & 0x0F) == 0x0A;
             } else { // Bit 8 = 1 -> ROM Bank Select
                 romBank = value & 0x0F;
@@ -149,10 +148,10 @@ class MBC2 extends AbstractMBC {
 
     @Override
     protected int readRamBank(int address) {
-        // MBC2 tem 512 nibbles (4-bit) de RAM.
-        int ramAddress = address & 0x01FF; // Endereços dão a volta a cada 512 bytes
+        
+        int ramAddress = address & 0x01FF; 
         if (ramData != null && ramAddress < ramData.length) {
-            return (ramData[ramAddress] & 0x0F) | 0xF0; // Retorna apenas os 4 bits de baixo
+            return (ramData[ramAddress] & 0x0F) | 0xF0; 
         }
         return 0xFF;
     }
@@ -161,21 +160,17 @@ class MBC2 extends AbstractMBC {
     protected void writeRamBank(int address, byte value) {
         int ramAddress = address & 0x01FF;
         if (ramData != null && ramAddress < ramData.length) {
-            ramData[ramAddress] = (byte)(value & 0x0F); // Armazena apenas os 4 bits de baixo
+            ramData[ramAddress] = (byte)(value & 0x0F); 
         }
     }
 }
 
 
-// =========================================================================
-// MBC 3 (com Relógio em Tempo Real - RTC)
-// =========================================================================
 class MBC3 extends AbstractMBC {
     private int romBank = 1;
-    private int ramBankOrRtcRegister = 0; // 0-3 para RAM, 8-C para RTC
-    private long rtcLatchedTime = 0;
+    private int ramBankOrRtcRegister = 0;
     private long rtcLastUpdateTime = System.currentTimeMillis();
-    private final byte[] rtcRegisters = new byte[5]; // S, M, H, DL, DH
+    private final byte[] rtcRegisters = new byte[5];
 
     public MBC3(byte[] romData, int ramSizeCode) {
         super(romData, ramSizeCode);
@@ -183,12 +178,10 @@ class MBC3 extends AbstractMBC {
 
     @Override
     public void update(int cycles) {
-        // Atualiza o RTC. Uma implementação mais precisa usaria o oscilador de 32768Hz,
-        // mas usar o tempo do sistema é uma aproximação funcional.
         long now = System.currentTimeMillis();
-        if (now - rtcLastUpdateTime > 1000) { // Atualiza a cada segundo
+        if (now - rtcLastUpdateTime > 1000) {
             rtcLastUpdateTime = now;
-            if ((rtcRegisters[4] & 0x40) == 0) { // Se o relógio não estiver parado (Halt = 0)
+            if ((rtcRegisters[4] & 0x40) == 0) {
                 long totalSeconds = getRtcSeconds();
                 totalSeconds++;
                 setRtcSeconds(totalSeconds);
@@ -211,24 +204,19 @@ class MBC3 extends AbstractMBC {
 
     @Override
     public void write(int address, byte value) {
-        if (address >= 0x0000 && address <= 0x1FFF) { // RAM e Timer Enable
+        if (address >= 0x0000 && address <= 0x1FFF) {
             ramEnabled = (value & 0x0F) == 0x0A;
-        } else if (address >= 0x2000 && address <= 0x3FFF) { // ROM Bank
+        } else if (address >= 0x2000 && address <= 0x3FFF) {
             romBank = value & 0x7F;
             if (romBank == 0) romBank = 1;
-        } else if (address >= 0x4000 && address <= 0x5FFF) { // RAM Bank ou RTC Register Select
+        } else if (address >= 0x4000 && address <= 0x5FFF) {
             ramBankOrRtcRegister = value & 0x0F;
-        } else if (address >= 0x6000 && address <= 0x7FFF) { // Latch Clock Data
-            if ((value & 0x01) == 0x01) { // A transição 00 -> 01 faz o latch
-                rtcLatchedTime = System.currentTimeMillis(); // Trava o tempo atual para leitura consistente
-                // Uma implementação mais precisa travaria os valores dos contadores internos
-            }
         }
     }
 
     @Override
     protected int readRamBank(int address) {
-        if (ramBankOrRtcRegister >= 0x08 && ramBankOrRtcRegister <= 0x0C) { // Acesso ao RTC
+        if (ramBankOrRtcRegister >= 0x08 && ramBankOrRtcRegister <= 0x0C) { 
             return rtcRegisters[ramBankOrRtcRegister - 0x08] & 0xFF;
         } else if (ramBankOrRtcRegister <= 0x03) { // Acesso à RAM
             int bank = ramBankOrRtcRegister;
@@ -242,9 +230,9 @@ class MBC3 extends AbstractMBC {
 
     @Override
     protected void writeRamBank(int address, byte value) {
-        if (ramBankOrRtcRegister >= 0x08 && ramBankOrRtcRegister <= 0x0C) { // Escreve no RTC
+        if (ramBankOrRtcRegister >= 0x08 && ramBankOrRtcRegister <= 0x0C) {
             rtcRegisters[ramBankOrRtcRegister - 0x08] = value;
-        } else if (ramBankOrRtcRegister <= 0x03) { // Escreve na RAM
+        } else if (ramBankOrRtcRegister <= 0x03) { 
             int bank = ramBankOrRtcRegister;
             int mappedAddress = (bank * 0x2000) + (address & 0x1FFF);
             if (ramData != null && mappedAddress < ramData.length) {
@@ -270,21 +258,18 @@ class MBC3 extends AbstractMBC {
         rtcRegisters[1] = (byte) minutes;
         rtcRegisters[2] = (byte) hours;
         rtcRegisters[3] = (byte) (days & 0xFF);
-        rtcRegisters[4] &= 0xFE; // Limpa o bit 0 (bit 8 dos dias)
-        rtcRegisters[4] |= (byte) ((days >> 8) & 1); // Seta o bit 8
-        if (days > 511) { // Se o contador de dias estourou
-            rtcRegisters[4] |= 0x80; // Seta o Carry bit
+        rtcRegisters[4] &= 0xFE; 
+        rtcRegisters[4] |= (byte) ((days >> 8) & 1); 
+        if (days > 511) { 
+            rtcRegisters[4] |= 0x80; 
         }
     }
 }
 
 
-// =========================================================================
-// MBC 5
-// =========================================================================
 class MBC5 extends AbstractMBC {
-    private int romBank = 1; // Pode ser de 0 a 511
-    private int ramBank = 0; // Pode ser de 0 a 15
+    private int romBank = 1;
+    private int ramBank = 0;
 
     public MBC5(byte[] romData, int ramSizeCode) {
         super(romData, ramSizeCode);
@@ -293,7 +278,7 @@ class MBC5 extends AbstractMBC {
     @Override
     public int read(int address) {
         if (address >= 0x0000 && address <= 0x3FFF) {
-            return romData[address] & 0xFF; // Banco 0 sempre fixo
+            return romData[address] & 0xFF;
         } else if (address >= 0x4000 && address <= 0x7FFF) {
             int mappedAddress = (romBank * 0x4000) + (address - 0x4000);
             if (mappedAddress < romData.length) {
@@ -305,14 +290,14 @@ class MBC5 extends AbstractMBC {
 
     @Override
     public void write(int address, byte value) {
-        if (address >= 0x0000 && address <= 0x1FFF) { // RAM Enable
+        if (address >= 0x0000 && address <= 0x1FFF) {
             ramEnabled = (value & 0x0F) == 0x0A;
-        } else if (address >= 0x2000 && address <= 0x2FFF) { // ROM Bank (8 bits de baixo)
+        } else if (address >= 0x2000 && address <= 0x2FFF) {
             romBank = (romBank & 0x100) | (value & 0xFF);
-        } else if (address >= 0x3000 && address <= 0x3FFF) { // ROM Bank (9º bit)
+        } else if (address >= 0x3000 && address <= 0x3FFF) {
             romBank = (romBank & 0x0FF) | ((value & 0x01) << 8);
-        } else if (address >= 0x4000 && address <= 0x5FFF) { // RAM Bank
-            ramBank = value & 0x0F; // TODO: Lógica de Rumble
+        } else if (address >= 0x4000 && address <= 0x5FFF) {
+            ramBank = value & 0x0F;
         }
     }
 
@@ -334,9 +319,6 @@ class MBC5 extends AbstractMBC {
     }
 }
 
-// =========================================================================
-// Implementação base para todos os MBCs
-// =========================================================================
 abstract class AbstractMBC implements MemoryBankController {
     protected final byte[] romData;
     protected byte[] ramData;
@@ -349,7 +331,6 @@ abstract class AbstractMBC implements MemoryBankController {
             this.ramData = new byte[ramSize];
             Arrays.fill(this.ramData, (byte)0xFF);
             System.out.println("RAM Externa alocada: " + ramSize + " bytes.");
-            // TODO: Carregar save .sav aqui se existir
         }
     }
 
@@ -357,9 +338,9 @@ abstract class AbstractMBC implements MemoryBankController {
         switch (code) {
             case 0x01: return 2 * 1024;
             case 0x02: return 8 * 1024;
-            case 0x03: return 32 * 1024;  // 4 banks de 8KB
-            case 0x04: return 128 * 1024; // 16 banks de 8KB
-            case 0x05: return 64 * 1024;  // 8 banks de 8KB
+            case 0x03: return 32 * 1024; 
+            case 0x04: return 128 * 1024; 
+            case 0x05: return 64 * 1024; 
             default: return 0;
         }
     }
@@ -382,22 +363,16 @@ abstract class AbstractMBC implements MemoryBankController {
 
     @Override
     public void update(int cycles) {
-        // Padrão é não fazer nada. Apenas MBCs com RTC precisam disso.
     }
 
-    // Métodos a serem implementados pelas subclasses
     protected abstract int readRamBank(int address);
     protected abstract void writeRamBank(int address, byte value);
 }
 
-
-// =========================================================================
-// MBC 0: ROM Only (e ROM+RAM sem banking)
-// =========================================================================
 class Mbc0RomOnly extends AbstractMBC {
     public Mbc0RomOnly(byte[] romData) {
-        super(romData, 0x02); // Assumindo até 8KB de RAM para ROM+RAM
-        this.ramEnabled = true; // ROM+RAM está sempre habilitada se presente
+        super(romData, 0x02);
+        this.ramEnabled = true;
     }
 
     @Override
@@ -430,13 +405,10 @@ class Mbc0RomOnly extends AbstractMBC {
 }
 
 
-// =========================================================================
-// MBC 1
-// =========================================================================
 class MBC1 extends AbstractMBC {
     private int romBank = 1;
     private int ramBank = 0;
-    private int bankingMode = 0; // 0=ROM, 1=RAM
+    private int bankingMode = 0;
 
     public MBC1(byte[] romData, int ramSizeCode) {
         super(romData, ramSizeCode);
@@ -446,10 +418,10 @@ class MBC1 extends AbstractMBC {
     public int read(int address) {
         if (address >= 0x0000 && address <= 0x3FFF) {
             int bank;
-            if (bankingMode == 1) { // Modo RAM
-                bank = (ramBank << 5); // Usa os bits do registrador de RAM como bits altos da ROM
-            } else { // Modo ROM
-                bank = 0; // Banco 0
+            if (bankingMode == 1) {
+                bank = (ramBank << 5);
+            } else {
+                bank = 0;
             }
             int mappedAddress = (bank * 0x4000) + address;
             if(mappedAddress < romData.length) {
@@ -470,15 +442,15 @@ class MBC1 extends AbstractMBC {
 
     @Override
     public void write(int address, byte value) {
-        if (address >= 0x0000 && address <= 0x1FFF) { // RAM Enable
+        if (address >= 0x0000 && address <= 0x1FFF) {
             ramEnabled = (value & 0x0F) == 0x0A;
-        } else if (address >= 0x2000 && address <= 0x3FFF) { // ROM Bank (low 5 bits)
+        } else if (address >= 0x2000 && address <= 0x3FFF) {
             int low5 = value & 0x1F;
             if (low5 == 0) low5 = 1;
             romBank = (romBank & 0xE0) | low5;
-        } else if (address >= 0x4000 && address <= 0x5FFF) { // RAM Bank or ROM Bank (high 2 bits)
+        } else if (address >= 0x4000 && address <= 0x5FFF) {
             ramBank = value & 0x03;
-        } else if (address >= 0x6000 && address <= 0x7FFF) { // Banking Mode Select
+        } else if (address >= 0x6000 && address <= 0x7FFF) {
             bankingMode = value & 0x01;
         }
     }
