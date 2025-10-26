@@ -21,7 +21,7 @@ public class CPU {
 
     private boolean haltBugTriggered = false;
 
-    private boolean eiExecuted = false;
+    private boolean eiDelayed = false;
 
     private boolean stopped = false;
 
@@ -41,9 +41,8 @@ public class CPU {
         ime = false;
         halted = false;
         haltBugTriggered = false;
-        eiExecuted = false;
+        eiDelayed = false;
         stopped = false;
-        System.out.println("CPU reset. PC=" + String.format("0x%04X", pc));
     }
     
     public void setDebugUndocumentedOpcodes(boolean enable) {
@@ -58,7 +57,6 @@ public class CPU {
         if (!ime && interruptPending) {
             haltBugTriggered = true;
             halted = false;
-            System.out.println("HALT bug triggered! Next instruction will be executed twice.");
         } else {
             halted = true;
             haltBugTriggered = false;
@@ -68,6 +66,11 @@ public class CPU {
     public int step() {
         cycles = 0;
         int executedCyclesThisStep = 0;
+
+        if (eiDelayed) {
+            ime = true;
+            eiDelayed = false;
+        }
 
         handleInterrupts();
 
@@ -80,11 +83,6 @@ public class CPU {
         } else if (stopped) {
             executedCyclesThisStep = 4;
         } else {
-            if (eiExecuted) {
-                ime = true;
-                eiExecuted = false;
-            }
-
             int opcode = fetch();
 
             if (haltBugTriggered) {
@@ -447,7 +445,7 @@ public class CPU {
             case 0xF9: sp = getHL(); cycles = 8; break;
             case 0xFA: a = mmu.readByte(fetchWord()); cycles = 16; break;
             case 0xFB: 
-                eiExecuted = true; 
+                eiDelayed = true; 
                 cycles = 4; 
                 break;
             case 0xFC:
@@ -1018,7 +1016,7 @@ public class CPU {
 
         ime = false;
         
-        eiExecuted = false;
+        eiDelayed = false;
 
         if ((requestedAndEnabled & 0x01) != 0) { 
             mmu.writeByte(0xFF0F, IF & ~0x01);
@@ -1046,7 +1044,6 @@ public class CPU {
     public void wakeFromStop() {
         if (stopped) {
             stopped = false;
-            System.out.println("CPU woken from STOP mode");
         }
     }
 
