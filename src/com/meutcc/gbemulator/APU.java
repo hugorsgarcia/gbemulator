@@ -411,6 +411,8 @@ public class APU {
                 channel3.clockLength();
                 channel4.clockLength();
                 break;
+            case 1: 
+                break;
             case 2: 
                 channel1.clockLength();
                 channel1.clockSweep();
@@ -418,11 +420,15 @@ public class APU {
                 channel3.clockLength();
                 channel4.clockLength();
                 break;
+            case 3: 
+                break;
             case 4: 
                 channel1.clockLength();
                 channel2.clockLength();
                 channel3.clockLength();
                 channel4.clockLength();
+                break;
+            case 5: 
                 break;
             case 6: 
                 channel1.clockLength();
@@ -466,7 +472,7 @@ public class APU {
             if ((nr51_panning & 0x08) != 0) rightOut += ch4;
             if ((nr51_panning & 0x80) != 0) leftOut += ch4;
 
-            
+           
             int leftVolume = (nr50_master_volume >> 4) & 0x07;
             int rightVolume = nr50_master_volume & 0x07;
             
@@ -477,17 +483,17 @@ public class APU {
             rightOut *= rightVol;
 
             
-            float dcOffset = 7.5f * 4.0f; // Offset DC de todos os 4 canais
-            
-            leftOut = (leftOut - dcOffset * leftVol) / 60.0f;
-            rightOut = (rightOut - dcOffset * rightVol) / 60.0f;
+            leftOut = leftOut / 60.0f;
+            rightOut = rightOut / 60.0f;
 
+            // Apply filters
             leftOut = applyHighPass(leftOut, true);
             rightOut = applyHighPass(rightOut, false);
             
             leftOut = applyLowPass(leftOut, true);
             rightOut = applyLowPass(rightOut, false);
             
+            // Soft clipping
             leftOut = softClip(leftOut);
             rightOut = softClip(rightOut);
         }
@@ -800,16 +806,26 @@ public class APU {
             
             frequencyTimer -= cycles;
             
-            while (frequencyTimer <= 0) {
+            
+            int maxIterations = 100;
+            int iterations = 0;
+            
+            while (frequencyTimer <= 0 && iterations < maxIterations) {
                 frequencyTimer += (2048 - frequencyValue) * 4;
                 dutyStep = (dutyStep + 1) % 8;
+                iterations++;
+            }
+            
+           
+            if (iterations >= maxIterations) {
+                frequencyTimer = (2048 - frequencyValue) * 4;
             }
         }
 
         @Override
         public float getOutputSample() {
             if (!enabled || !dacEnabled) {
-                return 7.5f;
+                return 0.0f;
             }
             
             int amplitude = DUTY_WAVEFORMS[dutyPattern][dutyStep];
@@ -902,12 +918,22 @@ public class APU {
             
             frequencyTimer -= cycles;
             
-            while (frequencyTimer <= 0) {
+            
+            int maxIterations = 100;
+            int iterations = 0;
+            
+            while (frequencyTimer <= 0 && iterations < maxIterations) {
                 frequencyTimer += (2048 - frequencyValue) * 2;
                 
                 wavePosition = (wavePosition + 1) % 32;
                 
                 readSampleToBuffer();
+                iterations++;
+            }
+            
+            
+            if (iterations >= maxIterations) {
+                frequencyTimer = (2048 - frequencyValue) * 2;
             }
         }
 
@@ -924,7 +950,7 @@ public class APU {
         @Override
         public float getOutputSample() {
             if (!enabled || !dacEnabled) {
-                return 7.5f;
+                return 0.0f;
             }
             
             float sample;
@@ -1044,10 +1070,20 @@ public class APU {
             
             frequencyTimer -= cycles;
             
-            while (frequencyTimer <= 0) {
+            
+            int maxIterations = 100;
+            int iterations = 0;
+            
+            while (frequencyTimer <= 0 && iterations < maxIterations) {
                 frequencyTimer += DIVISORS[divisorCode] << clockShift;
                 
                 clockLFSR();
+                iterations++;
+            }
+            
+            
+            if (iterations >= maxIterations) {
+                frequencyTimer = DIVISORS[divisorCode] << clockShift;
             }
         }
 
@@ -1070,7 +1106,7 @@ public class APU {
         @Override
         public float getOutputSample() {
             if (!enabled || !dacEnabled) {
-                return 7.5f;
+                return 0.0f;
             }
             
             int amplitude = (lfsr & 1) == 0 ? 1 : 0;
