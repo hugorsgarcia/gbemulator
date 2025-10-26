@@ -13,8 +13,8 @@ public class APU {
     private static final boolean BIG_ENDIAN = false;
     
     
-    private static final int AUDIO_OUTPUT_BUFFER_SAMPLES = 32768;  
-    private static final int INTERNAL_SAMPLE_BUFFER_SIZE = 8192;  
+    private static final int AUDIO_OUTPUT_BUFFER_SAMPLES = 8192;  
+    private static final int INTERNAL_SAMPLE_BUFFER_SIZE = 2048;  
     
     private static final int FRAME_SEQUENCER_PERIOD_TCYCLES = 8192;
     private static final long SAMPLE_PHASE_INCREMENT = ((long)SAMPLE_RATE << 16) / CPU_CLOCK_SPEED;
