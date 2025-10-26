@@ -292,17 +292,20 @@ public class PPU {
     }
     
     private void calculateMode3Duration() {
-        int duration = MODE_3_BASE_CYCLES; 
+        int duration = MODE_3_BASE_CYCLES; // 172 cycles
         
         if (isSpriteDisplayEnabled()) {
             int visibleSprites = countSpritesOnScanline();
-            duration += visibleSprites * 11; 
+            duration += visibleSprites * 11;
         }
         
         duration += (scx % 8);
         
         if (isWindowDisplayEnabled() && ly >= wy && wx >= 0 && wx <= 166) {
-            duration += 6;
+            int actualWX = wx - 7;
+            if (actualWX > 0 && actualWX < SCREEN_WIDTH) {
+                duration += 6;
+            }
         }
         
         mode3Duration = Math.min(duration, MODE_3_MAX_CYCLES);
@@ -330,7 +333,7 @@ public class PPU {
                 boolean shouldDraw = true;
                 
                 if (spritePixel.spritePriority && isBgWindowDisplayEnabled() && pixel.colorIndex != 0) {
-                    shouldDraw = false; // BG tem prioridade
+                    shouldDraw = false; 
                 }
                 
                 if (shouldDraw) {
@@ -437,6 +440,8 @@ public class PPU {
         boolean tallSprites = (lcdc & 0x04) != 0;
         int spriteHeight = tallSprites ? 16 : 8;
 
+        VisibleSprite highestPrioritySprite = null;
+
         for (int i = 0; i < 40; i++) {
             int oamAddr = i * 4;
 
@@ -448,48 +453,59 @@ public class PPU {
             if (y >= spriteY && y < (spriteY + spriteHeight) &&
                 x >= spriteX && x < (spriteX + 8)) {
                 
-                boolean yFlip = (attributes & 0x40) != 0;
-                boolean xFlip = (attributes & 0x20) != 0;
-                boolean bgPriority = (attributes & 0x80) != 0;
-                int paletteReg = (attributes & 0x10) != 0 ? obp1 : obp0;
-
-                if (tallSprites) {
-                    tileIndex &= 0xFE;
+                if (highestPrioritySprite == null || 
+                    spriteX < highestPrioritySprite.spriteX ||
+                    (spriteX == highestPrioritySprite.spriteX && i < highestPrioritySprite.spriteIndex)) {
+                    highestPrioritySprite = new VisibleSprite(i, spriteX, spriteY, tileIndex, attributes);
                 }
-
-                int yInSpriteTile = y - spriteY;
-                if (yFlip) {
-                    yInSpriteTile = (spriteHeight - 1) - yInSpriteTile;
-                }
-
-                if (tallSprites && yInSpriteTile >= 8) {
-                    tileIndex |= 0x01;
-                    yInSpriteTile -= 8;
-                }
-
-                int tileAddress = 0x8000 + (tileIndex * 16);
-                int tileRowDataAddress = tileAddress + (yInSpriteTile * 2);
-
-                if (tileRowDataAddress < 0x8000 || tileRowDataAddress + 1 >= 0xA000) continue;
-
-                int lsb = vram[tileRowDataAddress - 0x8000] & 0xFF;
-                int msb = vram[tileRowDataAddress + 1 - 0x8000] & 0xFF;
-
-                int px = x - spriteX;
-                int xInTilePixel = xFlip ? (7 - px) : px;
-
-                int bitPosition = 7 - xInTilePixel;
-                int colorBit0 = (lsb >> bitPosition) & 1;
-                int colorBit1 = (msb >> bitPosition) & 1;
-                int colorIndex = (colorBit1 << 1) | colorBit0;
-
-                if (colorIndex == 0) continue; // Cor 0 é transparente
-
-                return new PixelInfo(colorIndex, true, bgPriority, paletteReg);
             }
         }
 
-        return null;
+        if (highestPrioritySprite == null) {
+            return null;
+        }
+
+        boolean yFlip = (highestPrioritySprite.attributes & 0x40) != 0;
+        boolean xFlip = (highestPrioritySprite.attributes & 0x20) != 0;
+        boolean bgPriority = (highestPrioritySprite.attributes & 0x80) != 0;
+        int paletteReg = (highestPrioritySprite.attributes & 0x10) != 0 ? obp1 : obp0;
+
+        int tileIndex = highestPrioritySprite.tileIndex;
+        if (tallSprites) {
+            tileIndex &= 0xFE;
+        }
+
+        int yInSpriteTile = y - highestPrioritySprite.spriteY;
+        if (yFlip) {
+            yInSpriteTile = (spriteHeight - 1) - yInSpriteTile;
+        }
+
+        if (tallSprites && yInSpriteTile >= 8) {
+            tileIndex |= 0x01;
+            yInSpriteTile -= 8;
+        }
+
+        int tileAddress = 0x8000 + (tileIndex * 16);
+        int tileRowDataAddress = tileAddress + (yInSpriteTile * 2);
+
+        if (tileRowDataAddress < 0x8000 || tileRowDataAddress + 1 >= 0xA000) {
+            return null;
+        }
+
+        int lsb = vram[tileRowDataAddress - 0x8000] & 0xFF;
+        int msb = vram[tileRowDataAddress + 1 - 0x8000] & 0xFF;
+
+        int px = x - highestPrioritySprite.spriteX;
+        int xInTilePixel = xFlip ? (7 - px) : px;
+
+        int bitPosition = 7 - xInTilePixel;
+        int colorBit0 = (lsb >> bitPosition) & 1;
+        int colorBit1 = (msb >> bitPosition) & 1;
+        int colorIndex = (colorBit1 << 1) | colorBit0;
+
+        if (colorIndex == 0) return null; 
+
+        return new PixelInfo(colorIndex, true, bgPriority, paletteReg);
     }
     
     private void transferScanlineToScreen() {
@@ -522,15 +538,15 @@ public class PPU {
     private void updateStatInterrupts() {
         boolean newStatLine = false;
         
-        if ((stat & 0x08) != 0 && ppuMode == 0) {
+        if ((stat & 0x08) != 0 && ppuMode == 0) { 
             newStatLine = true;
         }
         
-        if ((stat & 0x10) != 0 && ppuMode == 1) {
+        if ((stat & 0x10) != 0 && ppuMode == 1) { 
             newStatLine = true;
         }
         
-        if ((stat & 0x20) != 0 && ppuMode == 2) {
+        if ((stat & 0x20) != 0 && ppuMode == 2) { 
             newStatLine = true;
         }
         
@@ -539,7 +555,7 @@ public class PPU {
         if (lycEqualsLy) {
             stat |= 0x04; 
         } else {
-            stat &= ~0x04;
+            stat &= ~0x04; 
         }
         
         if ((stat & 0x40) != 0 && lycEqualsLy) {
@@ -742,11 +758,12 @@ public class PPU {
             }
         }
 
+       
         visibleSprites.sort((a, b) -> {
             if (a.spriteX != b.spriteX) {
-                return Integer.compare(b.spriteX, a.spriteX);
+                return Integer.compare(b.spriteX, a.spriteX); 
             }
-            return Integer.compare(b.spriteIndex, a.spriteIndex);
+            return Integer.compare(b.spriteIndex, a.spriteIndex); 
         });
 
         for (VisibleSprite sprite : visibleSprites) {
@@ -797,8 +814,10 @@ public class PPU {
                         shouldDraw = false;
                     }
                     
-                    if (!currentPixel.fromSprite && bgPriority && isBgWindowDisplayEnabled() && currentPixel.colorIndex != 0) {
-                        shouldDraw = false; 
+                    if (!currentPixel.fromSprite && bgPriority && isBgWindowDisplayEnabled()) {
+                        if (currentPixel.colorIndex != 0) {
+                            shouldDraw = false; 
+                        }
                     }
                     
                     if (shouldDraw) {
@@ -816,11 +835,11 @@ public class PPU {
         return COLORS[paletteColorIndex];
     }
 
-    public boolean isLcdEnabled() { return (lcdc & 0x80) != 0; } // Bit 7
-    public boolean isWindowDisplayEnabled() { return (lcdc & 0x20) != 0; } // Bit 5
-    public boolean isSpriteSize8x16() { return (lcdc & 0x04) != 0; } // Bit 2
-    public boolean isSpriteDisplayEnabled() { return (lcdc & 0x02) != 0; } // Bit 1
-    public boolean isBgWindowDisplayEnabled() { return (lcdc & 0x01) != 0; } // Bit 0 (BG display no DMG, BG/Win master no CGB)
+    public boolean isLcdEnabled() { return (lcdc & 0x80) != 0; } 
+    public boolean isWindowDisplayEnabled() { return (lcdc & 0x20) != 0; } 
+    public boolean isSpriteSize8x16() { return (lcdc & 0x04) != 0; } 
+    public boolean isSpriteDisplayEnabled() { return (lcdc & 0x02) != 0; } 
+    public boolean isBgWindowDisplayEnabled() { return (lcdc & 0x01) != 0; } 
 
     public int getLcdc() { return lcdc; }
     public void setLcdc(int value) {
@@ -868,15 +887,15 @@ public class PPU {
         if (isLcdEnabled() && ppuMode != 1 && !oldStatLine) {
             boolean anyConditionActive = false;
             
-            if ((stat & 0x08) != 0 && ppuMode == 0) {
+            if ((stat & 0x08) != 0 && ppuMode == 0) { 
                 anyConditionActive = true;
             }
             
-            if ((stat & 0x20) != 0 && ppuMode == 2) {
+            if ((stat & 0x20) != 0 && ppuMode == 2) { 
                 anyConditionActive = true;
             }
             
-            if ((stat & 0x40) != 0 && (stat & 0x04) != 0) {
+            if ((stat & 0x40) != 0 && (stat & 0x04) != 0) { 
                 anyConditionActive = true;
             }
             
@@ -934,7 +953,7 @@ public class PPU {
         if (address >= 0 && address < vram.length) {
             return vram[address];
         }
-        return (byte) 0xFF; // Fora dos limites
+        return (byte) 0xFF; // Out of bounds
     }
 
     public void writeVRAM(int address, byte value) {
