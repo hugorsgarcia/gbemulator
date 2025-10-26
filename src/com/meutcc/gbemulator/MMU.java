@@ -5,9 +5,10 @@ import java.util.Arrays;
 public class MMU {
     private final byte[] memory = new byte[0x10000];
 
-    private Cartridge cartridge;
+    private final Cartridge cartridge;
     private final PPU ppu;
     private final APU apu;
+    private final Serial serial;
     private CPU cpu;
 
     private boolean bootRomEnabled = false;
@@ -39,6 +40,7 @@ public class MMU {
     public static final int REG_IE = 0xFFFF;
 
     private byte joypadState = (byte) 0xFF;
+    private byte previousJoypadState = (byte) 0xFF;  // Para edge detection
 
     private int divCounter = 0;
 
@@ -50,19 +52,21 @@ public class MMU {
     private int dmaCyclesRemaining = 0;
     private boolean dmaMemoryBlocked = false;
 
-    private int serialTransferCounter = 0;
-    private boolean serialTransferInProgress = false;
-
     public MMU(Cartridge cartridge, PPU ppu, APU apu) {
         this.cartridge = cartridge;
         this.ppu = ppu;
         this.apu = apu;
+        this.serial = new Serial();
         this.cpu = null;
         Arrays.fill(memory, (byte) 0x00);
     }
 
     public void setCpu(CPU cpu) {
         this.cpu = cpu;
+    }
+    
+    public Serial getSerial() {
+        return serial;
     }
 
     public void reset() {
@@ -93,11 +97,11 @@ public class MMU {
         writeByte(REG_BOOT_ROM_DISABLE, (byte) 0x00);
 
         joypadState = (byte) 0xFF;
+        previousJoypadState = (byte) 0xFF;
         divCounter = 0;
         timaOverflowPending = false;
         timaOverflowDelay = 0;
-        serialTransferCounter = 0;
-        serialTransferInProgress = false;
+        serial.reset();
         bootRomEnabled = false;
 
         System.out.println("MMU reset and I/O registers initialized.");
@@ -108,13 +112,10 @@ public class MMU {
             updateTimersSingleCycle();
         }
 
-        if(serialTransferInProgress) {
-            serialTransferCounter -= cycles;
-            if(serialTransferCounter <= 0) {
-                serialTransferInProgress = false;
-                memory[REG_SC] &= ~0x80;
-                memory[REG_IF] |= 0x08;
-            }
+        // Atualizar transferência serial
+        if (serial.update(cycles)) {
+            // Transferência completada - disparar interrupção Serial (IF bit 3)
+            memory[REG_IF] |= 0x08;
         }
     }
 
@@ -190,8 +191,9 @@ public class MMU {
     }
 
     public void loadCartridge(Cartridge cart) {
-        this.cartridge = cart;
-        System.out.println("Cartridge loaded into MMU.");
+        // Cartridge agora é final, não pode ser reatribuído
+        // Este método mantido para compatibilidade mas não faz nada
+        System.out.println("Cartridge loaded into MMU (cartridge is now final, set via constructor).");
     }
 
     public int readByte(int address) {
@@ -273,8 +275,8 @@ public class MMU {
                 }
                 return 0xFF;
 
-            case REG_SB: return memory[REG_SB] & 0xFF;
-            case REG_SC: return memory[REG_SC] & 0xFF | 0x7E;
+            case REG_SB: return serial.readSB();
+            case REG_SC: return serial.readSC();
 
             case REG_DIV: return memory[REG_DIV] & 0xFF;
             case REG_TIMA: return memory[REG_TIMA] & 0xFF;
@@ -321,15 +323,10 @@ public class MMU {
                 memory[REG_JOYP] = (byte) ((memory[REG_JOYP] & 0xCF) | (value & 0x30));
                 break;
             case REG_SB:
-                memory[REG_SB] = value;
+                serial.writeSB(value);
                 break;
             case REG_SC:
-                memory[REG_SC] = value;
-                if ((value & 0x81) == 0x81) {
-                    memory[REG_SB] = (byte)0xFF;
-                    serialTransferInProgress = true;
-                    serialTransferCounter = 4132;
-                }
+                serial.writeSC(value);
                 break;
             case REG_TIMA:
                 memory[REG_TIMA] = value;
@@ -436,8 +433,32 @@ public class MMU {
     }
 
     public void buttonPressed(Button button) {
+        byte oldState = joypadState;
         joypadState &= (byte) ~(1 << button.bit);
-        memory[REG_IF] |= 0x10;
+        
+        // Detectar edge (high-to-low transition)
+        // A interrupção só deve disparar se o botão mudou de não-pressionado para pressionado
+        int bitMask = (1 << button.bit);
+        boolean wasReleased = (oldState & bitMask) != 0;  // high = released
+        boolean isPressed = (joypadState & bitMask) == 0;  // low = pressed
+        
+        if (wasReleased && isPressed) {
+            // Verificar se o botão está selecionado pela linha P14/P15
+            byte joypReg = memory[REG_JOYP];
+            boolean directionSelected = (joypReg & 0x10) == 0;  // P14
+            boolean buttonSelected = (joypReg & 0x20) == 0;     // P15
+            
+            boolean shouldInterrupt = false;
+            if (button.bit < 4 && directionSelected) {  // Direcionais (bits 0-3)
+                shouldInterrupt = true;
+            } else if (button.bit >= 4 && buttonSelected) {  // Botões A/B/Select/Start (bits 4-7)
+                shouldInterrupt = true;
+            }
+            
+            if (shouldInterrupt) {
+                memory[REG_IF] |= 0x10;  // Set Joypad interrupt flag
+            }
+        }
 
         if (cpu != null) {
             cpu.wakeFromStop();
@@ -469,6 +490,7 @@ public class MMU {
         dos.writeInt(timaOverflowDelay);
         dos.writeByte(memory[REG_IF]);
         dos.writeByte(memory[REG_IE]);
+        serial.saveState(dos);
     }
 
     public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
@@ -484,5 +506,6 @@ public class MMU {
         timaOverflowDelay = dis.readInt();
         memory[REG_IF] = dis.readByte();
         memory[REG_IE] = dis.readByte();
+        serial.loadState(dis);
     }
 }
