@@ -400,7 +400,7 @@ public class MMU {
             ppu.writeOAM(i, (byte) readByteForDMA(sourceAddress + i));
         }
 
-        this.dmaCyclesRemaining = 160;
+        this.dmaCyclesRemaining = 644;
     }
 
     private int readByteForDMA(int address) {

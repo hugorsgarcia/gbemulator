@@ -49,8 +49,9 @@ public class GameBoy {
         int cycles;
 
         if (mmu.isDmaActive()) {
-            cycles = 4;
-            mmu.updateDma(cycles);
+            int dmaCycles = mmu.getDmaCyclesRemaining();
+            cycles = dmaCycles;
+            mmu.updateDma(dmaCycles);
         } else {
             cycles = cpu.step();
             if (cycles == -1) return -1;
