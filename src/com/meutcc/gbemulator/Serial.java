@@ -19,6 +19,10 @@ public class Serial {
     // Interface para dispositivos conectados (para futuras implementações)
     private SerialDevice connectedDevice = null;
     
+    // External clock support
+    private boolean externalClockMode = false;
+    private int externalClockBitPosition = 0;
+    
     /**
      * Reseta o estado do serial.
      */
@@ -29,6 +33,8 @@ public class Serial {
         transferCyclesRemaining = 0;
         shiftRegister = 0;
         bitsTransferred = 0;
+        externalClockMode = false;
+        externalClockBitPosition = 0;
         System.out.println("Serial reset.");
     }
     
@@ -87,13 +93,9 @@ public class Serial {
         
         if (startTransfer && internalClock && !transferInProgress) {
             startTransfer();
-        } else if (startTransfer && !internalClock) {
-            // External clock - neste emulador, não há dispositivo externo
-            // Simular que nenhum dispositivo está conectado (completar imediatamente)
-            // Em uma implementação real, aguardaria o clock externo
-            System.out.println("Serial: External clock mode requested (not implemented, simulating no connection)");
-            // Não iniciar transferência - aguardar clock externo que nunca virá
-            // Alguns jogos podem travar aqui se esperarem a transferência completar
+        } else if (startTransfer && !internalClock && !transferInProgress) {
+            // External clock mode - aguardar pulsos de clock externos
+            startExternalClockTransfer();
         }
     }
     
@@ -102,6 +104,7 @@ public class Serial {
      */
     private void startTransfer() {
         transferInProgress = true;
+        externalClockMode = false;
         shiftRegister = sb;
         bitsTransferred = 0;
         
@@ -109,7 +112,27 @@ public class Serial {
         boolean fastMode = (sc & 0x02) != 0;
         transferCyclesRemaining = fastMode ? TRANSFER_CYCLES_FAST : TRANSFER_CYCLES;
         
-        System.out.println(String.format("Serial: Transfer started, SB=0x%02X, SC=0x%02X", sb, sc));
+        System.out.println(String.format("Serial: Transfer started (Internal Clock), SB=0x%02X, SC=0x%02X", sb, sc));
+    }
+    
+    /**
+     * Inicia transferência com external clock.
+     */
+    private void startExternalClockTransfer() {
+        transferInProgress = true;
+        externalClockMode = true;
+        shiftRegister = sb;
+        bitsTransferred = 0;
+        externalClockBitPosition = 0;
+        
+        System.out.println(String.format("Serial: Transfer started (External Clock), SB=0x%02X, SC=0x%02X", sb, sc));
+        
+        // Em external clock mode, o dispositivo externo controla quando bits são transferidos
+        // Por padrão, sem dispositivo conectado, completa imediatamente para não travar
+        if (connectedDevice == null) {
+            System.out.println("Serial: External clock but no device - completing immediately");
+            completeTransfer();
+        }
     }
     
     /**
@@ -157,6 +180,36 @@ public class Serial {
     }
     
     /**
+     * Envia um pulso de clock externo (usado em external clock mode).
+     * Dispositivos externos chamam este método para avançar a transferência bit a bit.
+     * 
+     * @return true se a transferência foi completada com este pulso
+     */
+    public boolean sendExternalClockPulse() {
+        if (!transferInProgress || !externalClockMode) {
+            return false;
+        }
+        
+        // Avançar um bit
+        externalClockBitPosition++;
+        
+        if (externalClockBitPosition >= 8) {
+            // 8 bits transferidos - completar
+            completeTransfer();
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Verifica se está em modo external clock.
+     */
+    public boolean isExternalClockMode() {
+        return externalClockMode;
+    }
+    
+    /**
      * Salva o estado do serial para save states.
      */
     public void saveState(java.io.DataOutputStream dos) throws java.io.IOException {
@@ -166,6 +219,8 @@ public class Serial {
         dos.writeInt(transferCyclesRemaining);
         dos.writeInt(shiftRegister);
         dos.writeInt(bitsTransferred);
+        dos.writeBoolean(externalClockMode);
+        dos.writeInt(externalClockBitPosition);
     }
     
     /**
@@ -178,6 +233,8 @@ public class Serial {
         transferCyclesRemaining = dis.readInt();
         shiftRegister = dis.readInt();
         bitsTransferred = dis.readInt();
+        externalClockMode = dis.readBoolean();
+        externalClockBitPosition = dis.readInt();
     }
     
     /**

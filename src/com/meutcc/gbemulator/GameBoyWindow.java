@@ -98,12 +98,48 @@ public class GameBoyWindow extends JFrame {
 
         soundMenu.add(toggleSoundItem);
         menuBar.add(soundMenu);
+        
+        // Menu "Link Cable" (Multiplayer/Periféricos)
+        JMenu linkMenu = new JMenu("Link Cable");
+        
+        JMenu multiplayerMenu = new JMenu("Multiplayer");
+        JMenuItem hostGameItem = new JMenuItem("Host Game (Servidor)...");
+        hostGameItem.addActionListener(e -> hostMultiplayerGame());
+        multiplayerMenu.add(hostGameItem);
+        
+        JMenuItem joinGameItem = new JMenuItem("Join Game (Cliente)...");
+        joinGameItem.addActionListener(e -> joinMultiplayerGame());
+        multiplayerMenu.add(joinGameItem);
+        
+        JMenuItem disconnectItem = new JMenuItem("Disconnect");
+        disconnectItem.addActionListener(e -> disconnectLink());
+        multiplayerMenu.add(disconnectItem);
+        
+        linkMenu.add(multiplayerMenu);
+        linkMenu.addSeparator();
+        
+        JMenuItem printerItem = new JMenuItem("Connect Game Boy Printer");
+        printerItem.addActionListener(e -> connectPrinter());
+        linkMenu.add(printerItem);
+        
+        JMenuItem cameraItem = new JMenuItem("Connect Game Boy Camera");
+        cameraItem.addActionListener(e -> connectCamera());
+        linkMenu.add(cameraItem);
+        
+        linkMenu.addSeparator();
+        
+        JMenuItem disconnectDeviceItem = new JMenuItem("Disconnect Device");
+        disconnectDeviceItem.addActionListener(e -> disconnectDevice());
+        linkMenu.add(disconnectDeviceItem);
+        
+        menuBar.add(linkMenu);
         setJMenuBar(menuBar);
         
         addMenuPauseListeners(fileMenu);
         addMenuPauseListeners(windowMenu);
         addMenuPauseListeners(controlMenu);
         addMenuPauseListeners(soundMenu);
+        addMenuPauseListeners(linkMenu);
         
         addKeyListener(inputHandler);
         setFocusable(true);
@@ -410,6 +446,200 @@ public class GameBoyWindow extends JFrame {
 
         super.dispose();
         System.out.println("GameBoyWindow disposed.");
+    }
+    
+    // ==================== Link Cable / Multiplayer / Periféricos ====================
+    
+    private NetworkLinkCable networkLink = null;
+    private PrinterEmulator printer = null;
+    private CameraEmulator camera = null;
+    
+    private void hostMultiplayerGame() {
+        String portStr = JOptionPane.showInputDialog(this, 
+            "Digite a porta para hospedar (padrão: 5555):", "5555");
+        
+        if (portStr == null || portStr.trim().isEmpty()) {
+            return;
+        }
+        
+        try {
+            int port = Integer.parseInt(portStr.trim());
+            
+            networkLink = new NetworkLinkCable();
+            networkLink.setConnectionListener(new NetworkLinkCable.ConnectionListener() {
+                @Override
+                public void onConnected(String remoteAddress) {
+                    JOptionPane.showMessageDialog(GameBoyWindow.this,
+                        "Conectado: " + remoteAddress,
+                        "Link Cable", JOptionPane.INFORMATION_MESSAGE);
+                }
+                
+                @Override
+                public void onDisconnected(String reason) {
+                    JOptionPane.showMessageDialog(GameBoyWindow.this,
+                        "Desconectado: " + reason,
+                        "Link Cable", JOptionPane.WARNING_MESSAGE);
+                }
+                
+                @Override
+                public void onError(String error) {
+                    JOptionPane.showMessageDialog(GameBoyWindow.this,
+                        "Erro: " + error,
+                        "Link Cable", JOptionPane.ERROR_MESSAGE);
+                }
+            });
+            
+            networkLink.startServer(port);
+            gameBoy.getMmu().getSerial().connectDevice(networkLink);
+            
+            JOptionPane.showMessageDialog(this,
+                "Aguardando conexão na porta " + port + "...\n" +
+                "Outro jogador deve usar 'Join Game' com seu IP.",
+                "Multiplayer - Host", JOptionPane.INFORMATION_MESSAGE);
+                
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(this,
+                "Porta inválida!",
+                "Erro", JOptionPane.ERROR_MESSAGE);
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this,
+                "Erro ao iniciar servidor: " + e.getMessage(),
+                "Erro", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+    
+    private void joinMultiplayerGame() {
+        String host = JOptionPane.showInputDialog(this,
+            "Digite o IP do host:", "localhost");
+        
+        if (host == null || host.trim().isEmpty()) {
+            return;
+        }
+        
+        String portStr = JOptionPane.showInputDialog(this,
+            "Digite a porta (padrão: 5555):", "5555");
+        
+        if (portStr == null || portStr.trim().isEmpty()) {
+            return;
+        }
+        
+        try {
+            int port = Integer.parseInt(portStr.trim());
+            
+            networkLink = new NetworkLinkCable();
+            networkLink.setConnectionListener(new NetworkLinkCable.ConnectionListener() {
+                @Override
+                public void onConnected(String remoteAddress) {
+                    JOptionPane.showMessageDialog(GameBoyWindow.this,
+                        "Conectado a: " + remoteAddress,
+                        "Link Cable", JOptionPane.INFORMATION_MESSAGE);
+                }
+                
+                @Override
+                public void onDisconnected(String reason) {
+                    JOptionPane.showMessageDialog(GameBoyWindow.this,
+                        "Desconectado: " + reason,
+                        "Link Cable", JOptionPane.WARNING_MESSAGE);
+                }
+                
+                @Override
+                public void onError(String error) {
+                    JOptionPane.showMessageDialog(GameBoyWindow.this,
+                        "Erro: " + error,
+                        "Link Cable", JOptionPane.ERROR_MESSAGE);
+                }
+            });
+            
+            networkLink.connectToServer(host.trim(), port);
+            gameBoy.getMmu().getSerial().connectDevice(networkLink);
+            
+            JOptionPane.showMessageDialog(this,
+                "Conectando a " + host + ":" + port + "...",
+                "Multiplayer - Join", JOptionPane.INFORMATION_MESSAGE);
+                
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(this,
+                "Porta inválida!",
+                "Erro", JOptionPane.ERROR_MESSAGE);
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this,
+                "Erro ao conectar: " + e.getMessage(),
+                "Erro", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+    
+    private void disconnectLink() {
+        if (networkLink != null) {
+            networkLink.disconnect();
+            gameBoy.getMmu().getSerial().disconnectDevice();
+            networkLink = null;
+            
+            JOptionPane.showMessageDialog(this,
+                "Link Cable desconectado.",
+                "Link Cable", JOptionPane.INFORMATION_MESSAGE);
+        } else {
+            JOptionPane.showMessageDialog(this,
+                "Não há conexão ativa.",
+                "Link Cable", JOptionPane.WARNING_MESSAGE);
+        }
+    }
+    
+    private void connectPrinter() {
+        if (printer == null) {
+            printer = new PrinterEmulator();
+        }
+        
+        String dir = JOptionPane.showInputDialog(this,
+            "Diretório para salvar imagens (padrão: printer_output):",
+            "printer_output");
+        
+        if (dir != null && !dir.trim().isEmpty()) {
+            printer.setOutputDirectory(dir.trim());
+        }
+        
+        gameBoy.getMmu().getSerial().connectDevice(printer);
+        
+        JOptionPane.showMessageDialog(this,
+            "Game Boy Printer conectado!\n" +
+            "Imagens serão salvas em: " + dir,
+            "Printer", JOptionPane.INFORMATION_MESSAGE);
+    }
+    
+    private void connectCamera() {
+        if (camera == null) {
+            camera = new CameraEmulator();
+        }
+        
+        String imagePath = JOptionPane.showInputDialog(this,
+            "Caminho da imagem para simular captura (opcional):");
+        
+        if (imagePath != null && !imagePath.trim().isEmpty()) {
+            camera.loadImage(imagePath.trim());
+        }
+        
+        gameBoy.getMmu().getSerial().connectDevice(camera);
+        
+        JOptionPane.showMessageDialog(this,
+            "Game Boy Camera conectado!\n" +
+            "Nota: Esta é uma simulação básica.\n" +
+            "Captura real de webcam requer bibliotecas externas.",
+            "Camera", JOptionPane.INFORMATION_MESSAGE);
+    }
+    
+    private void disconnectDevice() {
+        gameBoy.getMmu().getSerial().disconnectDevice();
+        
+        if (networkLink != null) {
+            networkLink.disconnect();
+            networkLink = null;
+        }
+        
+        printer = null;
+        camera = null;
+        
+        JOptionPane.showMessageDialog(this,
+            "Dispositivo desconectado.",
+            "Link Cable", JOptionPane.INFORMATION_MESSAGE);
     }
 
     private class GameBoyScreenPanel extends JPanel {

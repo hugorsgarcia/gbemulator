@@ -953,7 +953,7 @@ public class PPU {
         if (address >= 0 && address < vram.length) {
             return vram[address];
         }
-        return (byte) 0xFF; // Out of bounds
+        return (byte) 0xFF;
     }
 
     public void writeVRAM(int address, byte value) {

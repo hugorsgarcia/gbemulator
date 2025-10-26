@@ -35,12 +35,12 @@ public class MMU {
     public static final int REG_OBP1 = 0xFF49;
     public static final int REG_WY = 0xFF4A;
     public static final int REG_WX = 0xFF4B;
-    public static final int REG_KEY1 = 0xFF4D; // CGB Speed switch
+    public static final int REG_KEY1 = 0xFF4D;
     public static final int REG_BOOT_ROM_DISABLE = 0xFF50;
     public static final int REG_IE = 0xFFFF;
 
     private byte joypadState = (byte) 0xFF;
-    private byte previousJoypadState = (byte) 0xFF;  // Para edge detection
+    private byte previousJoypadState = (byte) 0xFF;
 
     private int divCounter = 0;
 
@@ -112,9 +112,8 @@ public class MMU {
             updateTimersSingleCycle();
         }
 
-        // Atualizar transferência serial
+       
         if (serial.update(cycles)) {
-            // Transferência completada - disparar interrupção Serial (IF bit 3)
             memory[REG_IF] |= 0x08;
         }
     }
@@ -191,8 +190,6 @@ public class MMU {
     }
 
     public void loadCartridge(Cartridge cart) {
-        // Cartridge agora é final, não pode ser reatribuído
-        // Este método mantido para compatibilidade mas não faz nada
         System.out.println("Cartridge loaded into MMU (cartridge is now final, set via constructor).");
     }
 
@@ -436,27 +433,24 @@ public class MMU {
         byte oldState = joypadState;
         joypadState &= (byte) ~(1 << button.bit);
         
-        // Detectar edge (high-to-low transition)
-        // A interrupção só deve disparar se o botão mudou de não-pressionado para pressionado
         int bitMask = (1 << button.bit);
-        boolean wasReleased = (oldState & bitMask) != 0;  // high = released
-        boolean isPressed = (joypadState & bitMask) == 0;  // low = pressed
+        boolean wasReleased = (oldState & bitMask) != 0;  
+        boolean isPressed = (joypadState & bitMask) == 0;  
         
         if (wasReleased && isPressed) {
-            // Verificar se o botão está selecionado pela linha P14/P15
             byte joypReg = memory[REG_JOYP];
-            boolean directionSelected = (joypReg & 0x10) == 0;  // P14
-            boolean buttonSelected = (joypReg & 0x20) == 0;     // P15
+            boolean directionSelected = (joypReg & 0x10) == 0;  
+            boolean buttonSelected = (joypReg & 0x20) == 0;    
             
             boolean shouldInterrupt = false;
-            if (button.bit < 4 && directionSelected) {  // Direcionais (bits 0-3)
+            if (button.bit < 4 && directionSelected) {  
                 shouldInterrupt = true;
-            } else if (button.bit >= 4 && buttonSelected) {  // Botões A/B/Select/Start (bits 4-7)
+            } else if (button.bit >= 4 && buttonSelected) {  
                 shouldInterrupt = true;
             }
             
             if (shouldInterrupt) {
-                memory[REG_IF] |= 0x10;  // Set Joypad interrupt flag
+                memory[REG_IF] |= 0x10;  
             }
         }
 
