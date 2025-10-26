@@ -6,4 +6,5 @@ public interface MemoryBankController {
     int readRam(int address);
     void writeRam(int address, byte value);
     void update(int cycles);
+    byte[] getRamData(); // For save file persistence
 }

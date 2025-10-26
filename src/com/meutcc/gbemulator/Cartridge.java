@@ -8,6 +8,9 @@ import java.util.Arrays;
 
 public class Cartridge {
     private MemoryBankController mbc;
+    private boolean hasBattery = false;
+    private String currentRomPath = null;
+    private int mbcTypeCode = 0;
 
     public Cartridge() {
         
@@ -16,6 +19,11 @@ public class Cartridge {
 
     public boolean loadROM(String filePath) {
         try {
+            // Save current battery RAM before loading new ROM
+            if (hasBattery && currentRomPath != null) {
+                saveBatteryRam(currentRomPath);
+            }
+
             Path path = Paths.get(filePath);
             if (!Files.exists(path) || !Files.isReadable(path)) {
                 System.err.println("Erro: Arquivo ROM não encontrado ou não pode ser lido: " + filePath);
@@ -30,7 +38,17 @@ public class Cartridge {
                 return false;
             }
 
+            this.currentRomPath = filePath;
+            
+            // Load battery RAM if cartridge has battery
+            if (hasBattery) {
+                loadBatteryRam(filePath);
+            }
+
             System.out.println("Cartucho pronto para uso com: " + this.mbc.getClass().getSimpleName());
+            if (hasBattery) {
+                System.out.println("Cartucho possui bateria para salvar dados.");
+            }
             return true;
 
         } catch (IOException e) {
@@ -46,12 +64,15 @@ public class Cartridge {
             return null;
         }
 
-        int mbcTypeCode = romData[0x0147] & 0xFF;
+        mbcTypeCode = romData[0x0147] & 0xFF;
         int romSizeCode = romData[0x0148] & 0xFF;
         int ramSizeCode = romData[0x0149] & 0xFF;
 
         System.out.println(String.format("Cabeçalho - Tipo MBC: 0x%02X, Tamanho ROM: 0x%02X, Tamanho RAM: 0x%02X",
                 mbcTypeCode, romSizeCode, ramSizeCode));
+
+        // Detect if cartridge has battery
+        hasBattery = hasBatteryBackedRam(mbcTypeCode);
 
         switch (mbcTypeCode) {
             case 0x00:
@@ -86,6 +107,96 @@ public class Cartridge {
             default:
                 System.err.println("AVISO: Tipo de MBC 0x" + Integer.toHexString(mbcTypeCode) + " não suportado. Tratando como ROM Only.");
                 return new Mbc0RomOnly(romData);
+        }
+    }
+
+    private boolean hasBatteryBackedRam(int mbcType) {
+        switch (mbcType) {
+            case 0x03: 
+            case 0x06: 
+            case 0x09: 
+            case 0x0D: 
+            case 0x0F: 
+            case 0x10: 
+            case 0x13: 
+            case 0x1B: 
+            case 0x1E: 
+            case 0xFF: 
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private String getSaveFilePath(String romPath) {
+        
+        if (romPath.toLowerCase().endsWith(".gb")) {
+            return romPath.substring(0, romPath.length() - 3) + ".sav";
+        } else if (romPath.toLowerCase().endsWith(".gbc")) {
+            return romPath.substring(0, romPath.length() - 4) + ".sav";
+        } else {
+            return romPath + ".sav";
+        }
+    }
+
+    private void loadBatteryRam(String romPath) {
+        String savePath = getSaveFilePath(romPath);
+        Path path = Paths.get(savePath);
+        
+        if (!Files.exists(path)) {
+            System.out.println("Nenhum arquivo de save encontrado: " + savePath);
+            return;
+        }
+
+        try {
+            byte[] saveData = Files.readAllBytes(path);
+            byte[] ramData = mbc.getRamData();
+            
+            if (ramData != null) {
+                int bytesToCopy = Math.min(saveData.length, ramData.length);
+                System.arraycopy(saveData, 0, ramData, 0, bytesToCopy);
+                System.out.println("Save carregado: " + savePath + " (" + bytesToCopy + " bytes)");
+                
+                
+                if (mbc instanceof MBC3 && saveData.length > ramData.length) {
+                    ((MBC3)mbc).loadRtcData(saveData, ramData.length);
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Erro ao carregar save: " + e.getMessage());
+        }
+    }
+
+    private void saveBatteryRam(String romPath) {
+        String savePath = getSaveFilePath(romPath);
+        byte[] ramData = mbc.getRamData();
+        
+        if (ramData == null) {
+            return;
+        }
+
+        try {
+            
+            byte[] dataToSave;
+            if (mbc instanceof MBC3) {
+                byte[] rtcData = ((MBC3)mbc).getRtcData();
+                dataToSave = new byte[ramData.length + rtcData.length];
+                System.arraycopy(ramData, 0, dataToSave, 0, ramData.length);
+                System.arraycopy(rtcData, 0, dataToSave, ramData.length, rtcData.length);
+            } else {
+                dataToSave = ramData;
+            }
+            
+            Files.write(Paths.get(savePath), dataToSave);
+            System.out.println("Save gravado: " + savePath + " (" + dataToSave.length + " bytes)");
+        } catch (IOException e) {
+            System.err.println("Erro ao salvar save: " + e.getMessage());
+        }
+    }
+
+    public void saveBatteryRam() {
+        if (hasBattery && currentRomPath != null) {
+            saveBatteryRam(currentRomPath);
         }
     }
 
@@ -171,6 +282,8 @@ class MBC3 extends AbstractMBC {
     private int ramBankOrRtcRegister = 0;
     private long rtcLastUpdateTime = System.currentTimeMillis();
     private final byte[] rtcRegisters = new byte[5];
+    private final byte[] rtcLatchedRegisters = new byte[5];
+    private int latchState = 0; 
 
     public MBC3(byte[] romData, int ramSizeCode) {
         super(romData, ramSizeCode);
@@ -181,7 +294,7 @@ class MBC3 extends AbstractMBC {
         long now = System.currentTimeMillis();
         if (now - rtcLastUpdateTime > 1000) {
             rtcLastUpdateTime = now;
-            if ((rtcRegisters[4] & 0x40) == 0) {
+            if ((rtcRegisters[4] & 0x40) == 0) { 
                 long totalSeconds = getRtcSeconds();
                 totalSeconds++;
                 setRtcSeconds(totalSeconds);
@@ -211,13 +324,23 @@ class MBC3 extends AbstractMBC {
             if (romBank == 0) romBank = 1;
         } else if (address >= 0x4000 && address <= 0x5FFF) {
             ramBankOrRtcRegister = value & 0x0F;
+        } else if (address >= 0x6000 && address <= 0x7FFF) {
+            
+            if (value == 0x00) {
+                latchState = 1;
+            } else if (value == 0x01 && latchState == 1) {
+                
+                System.arraycopy(rtcRegisters, 0, rtcLatchedRegisters, 0, 5);
+                latchState = 0;
+            }
         }
     }
 
     @Override
     protected int readRamBank(int address) {
         if (ramBankOrRtcRegister >= 0x08 && ramBankOrRtcRegister <= 0x0C) { 
-            return rtcRegisters[ramBankOrRtcRegister - 0x08] & 0xFF;
+            
+            return rtcLatchedRegisters[ramBankOrRtcRegister - 0x08] & 0xFF;
         } else if (ramBankOrRtcRegister <= 0x03) { // Acesso à RAM
             int bank = ramBankOrRtcRegister;
             int mappedAddress = (bank * 0x2000) + (address & 0x1FFF);
@@ -231,6 +354,7 @@ class MBC3 extends AbstractMBC {
     @Override
     protected void writeRamBank(int address, byte value) {
         if (ramBankOrRtcRegister >= 0x08 && ramBankOrRtcRegister <= 0x0C) {
+            // Write to actual RTC registers (not latched)
             rtcRegisters[ramBankOrRtcRegister - 0x08] = value;
         } else if (ramBankOrRtcRegister <= 0x03) { 
             int bank = ramBankOrRtcRegister;
@@ -262,6 +386,51 @@ class MBC3 extends AbstractMBC {
         rtcRegisters[4] |= (byte) ((days >> 8) & 1); 
         if (days > 511) { 
             rtcRegisters[4] |= 0x80; 
+        }
+    }
+
+    public byte[] getRtcData() {
+        
+        byte[] rtcData = new byte[48];
+        System.arraycopy(rtcRegisters, 0, rtcData, 0, 5);
+        
+        
+        long timestamp = System.currentTimeMillis() / 1000; // seconds since epoch
+        rtcData[5] = (byte) (timestamp >> 56);
+        rtcData[6] = (byte) (timestamp >> 48);
+        rtcData[7] = (byte) (timestamp >> 40);
+        rtcData[8] = (byte) (timestamp >> 32);
+        rtcData[9] = (byte) (timestamp >> 24);
+        rtcData[10] = (byte) (timestamp >> 16);
+        rtcData[11] = (byte) (timestamp >> 8);
+        rtcData[12] = (byte) timestamp;
+        
+        return rtcData;
+    }
+
+    public void loadRtcData(byte[] saveData, int offset) {
+        if (saveData.length >= offset + 48) {
+            
+            System.arraycopy(saveData, offset, rtcRegisters, 0, 5);
+            System.arraycopy(saveData, offset, rtcLatchedRegisters, 0, 5);
+            
+            
+            long savedTimestamp = 0;
+            for (int i = 0; i < 8; i++) {
+                savedTimestamp = (savedTimestamp << 8) | (saveData[offset + 5 + i] & 0xFF);
+            }
+            
+            long currentTimestamp = System.currentTimeMillis() / 1000;
+            long elapsedSeconds = currentTimestamp - savedTimestamp;
+            
+           
+            if ((rtcRegisters[4] & 0x40) == 0 && elapsedSeconds > 0) {
+                long totalSeconds = getRtcSeconds() + elapsedSeconds;
+                setRtcSeconds(totalSeconds);
+            }
+            
+            rtcLastUpdateTime = System.currentTimeMillis();
+            System.out.println("RTC data loaded with " + elapsedSeconds + " seconds elapsed.");
         }
     }
 }
@@ -363,6 +532,11 @@ abstract class AbstractMBC implements MemoryBankController {
 
     @Override
     public void update(int cycles) {
+    }
+
+    @Override
+    public byte[] getRamData() {
+        return ramData;
     }
 
     protected abstract int readRamBank(int address);

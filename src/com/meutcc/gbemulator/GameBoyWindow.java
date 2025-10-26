@@ -24,8 +24,28 @@ public class GameBoyWindow extends JFrame {
 
     public GameBoyWindow() {
         setTitle("GameBoy Emulator TCC");
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         setResizable(true);
+        
+        
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent windowEvent) {
+                if (running) {
+                    running = false;
+                    try {
+                        if (emulationThread != null) {
+                            emulationThread.join(500);
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                
+                gameBoy.getCartridge().saveBatteryRam();
+                System.exit(0);
+            }
+        });
 
         gameBoy = new GameBoy();
         gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
@@ -238,6 +258,9 @@ public class GameBoyWindow extends JFrame {
                 System.err.println("Thread de emulação interrompida durante troca de ROM.");
             }
         }
+
+       
+        gameBoy.getCartridge().saveBatteryRam();
 
         if (gameBoy.loadROM(romPath)) {
             System.out.println("ROM loaded: " + romPath);
