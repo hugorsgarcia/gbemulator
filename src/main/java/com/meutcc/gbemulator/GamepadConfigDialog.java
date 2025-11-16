@@ -13,15 +13,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * GamepadConfigDialog - Interface gráfica para configurar gamepads
- * 
- * Permite:
- * - Ver gamepads detectados
- * - Selecionar qual gamepad usar
- * - Configurar mapeamento de botões
- * - Testar inputs em tempo real
- */
+
 public class GamepadConfigDialog extends JDialog {
     
     private final GamepadManager gamepadManager;
@@ -57,11 +49,9 @@ public class GamepadConfigDialog extends JDialog {
         setSize(700, 600);
         setLocationRelativeTo(parent);
         
-        // Painel superior - Seleção de gamepad
         JPanel topPanel = createGamepadSelectionPanel();
         add(topPanel, BorderLayout.NORTH);
         
-        // Painel central - Dividido entre mapeamento e teste
         JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
         
         mappingPanel = createMappingPanel();
@@ -73,17 +63,13 @@ public class GamepadConfigDialog extends JDialog {
         
         add(splitPane, BorderLayout.CENTER);
         
-        // Painel inferior - Botões de ação
         JPanel bottomPanel = createButtonPanel();
         add(bottomPanel, BorderLayout.SOUTH);
         
-        // Detecta gamepads ao abrir
         detectAndPopulateGamepads();
         
-        // Inicia timer de teste
         startTestTimer();
         
-        // Para o timer ao fechar
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
@@ -94,9 +80,7 @@ public class GamepadConfigDialog extends JDialog {
         gamepadComboBox = new JComboBox<>();
     }
     
-    /**
-     * Cria o painel de seleção de gamepad
-     */
+   
     private JPanel createGamepadSelectionPanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
         panel.setBorder(new EmptyBorder(10, 10, 10, 10));
@@ -117,15 +101,12 @@ public class GamepadConfigDialog extends JDialog {
         panel.add(leftPanel, BorderLayout.WEST);
         panel.add(detectButton, BorderLayout.EAST);
         
-        // Armazena referência para atualizar depois
         panel.putClientProperty("comboBox", comboBox);
         
         return panel;
     }
     
-    /**
-     * Cria o painel de mapeamento de botões
-     */
+   
     private JPanel createMappingPanel() {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(new TitledBorder("Mapeamento de Botões"));
@@ -163,9 +144,6 @@ public class GamepadConfigDialog extends JDialog {
         return panel;
     }
     
-    /**
-     * Cria o painel de teste de input
-     */
     private JPanel createTestPanel() {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(new TitledBorder("Teste de Input (Pressione botões no gamepad)"));
@@ -202,9 +180,6 @@ public class GamepadConfigDialog extends JDialog {
         return panel;
     }
     
-    /**
-     * Cria o painel de botões de ação
-     */
     private JPanel createButtonPanel() {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         panel.setBorder(new EmptyBorder(10, 10, 10, 10));
@@ -227,13 +202,9 @@ public class GamepadConfigDialog extends JDialog {
         return panel;
     }
     
-    /**
-     * Detecta gamepads e popula o combo box
-     */
     private void detectAndPopulateGamepads() {
         List<Controller> gamepads = gamepadManager.detectGamepads();
         
-        // Encontra o combo box
         JComboBox<String> comboBox = findComboBox();
         if (comboBox == null) return;
         
@@ -266,9 +237,6 @@ public class GamepadConfigDialog extends JDialog {
         updateMappingDisplay();
     }
     
-    /**
-     * Encontra o combo box de seleção
-     */
     @SuppressWarnings("unchecked")
     private JComboBox<String> findComboBox() {
         java.awt.Component[] components = ((JPanel) getContentPane().getComponent(0)).getComponents();
@@ -283,9 +251,6 @@ public class GamepadConfigDialog extends JDialog {
         return null;
     }
     
-    /**
-     * Chamado quando um gamepad é selecionado
-     */
     private void onGamepadSelected(int index) {
         List<Controller> gamepads = gamepadManager.detectGamepads();
         if (index >= 0 && index < gamepads.size()) {
@@ -293,10 +258,7 @@ public class GamepadConfigDialog extends JDialog {
             updateMappingDisplay();
         }
     }
-    
-    /**
-     * Inicia o processo de mapeamento de um botão
-     */
+
     private void startButtonMapping(MMU.Button button, JButton displayButton) {
         if (buttonBeingMapped != null) {
             // Cancela mapeamento anterior
@@ -310,7 +272,6 @@ public class GamepadConfigDialog extends JDialog {
         displayButton.setText(">>> Pressione um botão no gamepad <<<");
         displayButton.setBackground(Color.YELLOW);
         
-        // Inicia thread para detectar input
         new Thread(() -> {
             if (waitForGamepadInput(button)) {
                 SwingUtilities.invokeLater(() -> {
@@ -322,9 +283,6 @@ public class GamepadConfigDialog extends JDialog {
         }).start();
     }
     
-    /**
-     * Aguarda input do gamepad para mapeamento
-     */
     private boolean waitForGamepadInput(MMU.Button button) {
         if (!gamepadManager.hasActiveGamepad()) {
             return false;
@@ -336,7 +294,6 @@ public class GamepadConfigDialog extends JDialog {
         Controller gamepad = gamepadManager.getActiveGamepad();
         Component[] components = gamepadManager.getGamepadComponents();
         
-        // Aguarda até 10 segundos por um input
         while (System.currentTimeMillis() - startTime < timeout) {
             if (!gamepad.poll()) {
                 return false;
@@ -347,14 +304,12 @@ public class GamepadConfigDialog extends JDialog {
                 String componentId = component.getIdentifier().getName().toLowerCase();
                 
                 if (component.isAnalog()) {
-                    // Detecta movimento significativo no eixo
                     if (Math.abs(value) > 0.7f) {
                         String key = value > 0 ? componentId + "_positive" : componentId + "_negative";
                         gamepadManager.setButtonMapping(key, button);
                         return true;
                     }
                 } else {
-                    // Detecta botão pressionado
                     if (value > 0.5f) {
                         gamepadManager.setButtonMapping(componentId, button);
                         return true;
@@ -372,19 +327,14 @@ public class GamepadConfigDialog extends JDialog {
         return false;
     }
     
-    /**
-     * Atualiza a exibição do mapeamento atual
-     */
     private void updateMappingDisplay() {
         Map<String, MMU.Button> mapping = gamepadManager.getButtonMapping();
         Map<MMU.Button, String> reverseMapping = new HashMap<>();
         
-        // Inverte o mapeamento para exibição
         for (Map.Entry<String, MMU.Button> entry : mapping.entrySet()) {
             reverseMapping.put(entry.getValue(), entry.getKey());
         }
         
-        // Atualiza os botões
         for (Map.Entry<MMU.Button, JButton> entry : mappingButtons.entrySet()) {
             MMU.Button button = entry.getKey();
             JButton displayButton = entry.getValue();
@@ -398,9 +348,6 @@ public class GamepadConfigDialog extends JDialog {
         }
     }
     
-    /**
-     * Formata o nome do componente para exibição
-     */
     private String formatComponentName(String componentId) {
         componentId = componentId.replace("_", " ");
         componentId = componentId.replace("button", "Botão");
@@ -410,9 +357,6 @@ public class GamepadConfigDialog extends JDialog {
         return componentId.substring(0, 1).toUpperCase() + componentId.substring(1);
     }
     
-    /**
-     * Restaura o mapeamento padrão
-     */
     private void resetToDefault() {
         int result = JOptionPane.showConfirmDialog(this,
             "Deseja restaurar o mapeamento padrão?",
@@ -424,18 +368,12 @@ public class GamepadConfigDialog extends JDialog {
             updateMappingDisplay();
         }
     }
-    
-    /**
-     * Inicia o timer de teste de input
-     */
+
     private void startTestTimer() {
         testTimer = new Timer(50, e -> updateTestDisplay());
         testTimer.start();
     }
     
-    /**
-     * Para o timer de teste
-     */
     private void stopTestTimer() {
         if (testTimer != null) {
             testTimer.stop();
@@ -443,9 +381,6 @@ public class GamepadConfigDialog extends JDialog {
         }
     }
     
-    /**
-     * Atualiza a exibição do teste de input
-     */
     private void updateTestDisplay() {
         if (!gamepadManager.hasActiveGamepad()) {
             return;
@@ -459,26 +394,22 @@ public class GamepadConfigDialog extends JDialog {
         Map<String, MMU.Button> mapping = gamepadManager.getButtonMapping();
         Map<MMU.Button, Boolean> buttonStates = new HashMap<>();
         
-        // Inicializa todos como soltos
         for (MMU.Button button : BUTTONS) {
             buttonStates.put(button, false);
         }
         
-        // Verifica estado atual dos componentes
         Component[] components = gamepad.getComponents();
         for (Component component : components) {
             float value = component.getPollData();
             String componentId = component.getIdentifier().getName().toLowerCase();
             
             if (component.isAnalog()) {
-                // Verifica eixo positivo
                 if (value > 0.5f) {
                     MMU.Button button = mapping.get(componentId + "_positive");
                     if (button != null) {
                         buttonStates.put(button, true);
                     }
                 }
-                // Verifica eixo negativo
                 if (value < -0.5f) {
                     MMU.Button button = mapping.get(componentId + "_negative");
                     if (button != null) {
@@ -486,7 +417,6 @@ public class GamepadConfigDialog extends JDialog {
                     }
                 }
             } else {
-                // Verifica botão digital
                 if (value > 0.5f) {
                     MMU.Button button = mapping.get(componentId);
                     if (button != null) {
@@ -496,7 +426,6 @@ public class GamepadConfigDialog extends JDialog {
             }
         }
         
-        // Atualiza labels
         for (Map.Entry<MMU.Button, JLabel> entry : testLabels.entrySet()) {
             MMU.Button button = entry.getKey();
             JLabel label = entry.getValue();

@@ -8,11 +8,11 @@ public class Serial {
     
     private boolean transferInProgress = false;
     private int transferCyclesRemaining = 0;
-    private int shiftRegister = 0;  // Registrador de deslocamento interno
+    private int shiftRegister = 0; 
     private int bitsTransferred = 0;
     
-    private static final int TRANSFER_CYCLES = 4096;  // Ciclos para transferir 8 bits (512 ciclos por bit)
-    private static final int TRANSFER_CYCLES_FAST = 256;  // Modo rápido CGB (não implementado ainda)
+    private static final int TRANSFER_CYCLES = 4096;  
+    private static final int TRANSFER_CYCLES_FAST = 256; 
     
     private SerialDevice connectedDevice = null;
     
@@ -83,9 +83,7 @@ public class Serial {
         
         boolean fastMode = (sc & 0x02) != 0;
         transferCyclesRemaining = fastMode ? TRANSFER_CYCLES_FAST : TRANSFER_CYCLES;
-        
-        // Debug logging disabled for testing performance
-        // System.out.println(String.format("Serial: Transfer started (Internal Clock), SB=0x%02X, SC=0x%02X", sb, sc));
+ 
     }
     
    

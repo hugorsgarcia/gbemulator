@@ -3,16 +3,6 @@ package com.meutcc.gbemulator;
 import java.io.*;
 import java.nio.file.*;
 
-/**
- * NativeLibraryLoader - Extrai e carrega automaticamente as DLLs nativas do JInput
- * 
- * Esta classe é responsável por:
- * - Detectar o sistema operacional e arquitetura
- * - Extrair as DLLs do JAR para um diretório temporário
- * - Configurar o java.library.path para encontrar as DLLs
- * 
- * As DLLs são embutidas no JAR durante o build e extraídas na primeira execução.
- */
 public class NativeLibraryLoader {
     
     private static final String[] WINDOWS_64_LIBS = {
@@ -30,10 +20,7 @@ public class NativeLibraryLoader {
     };
     
     private static boolean loaded = false;
-    
-    /**
-     * Carrega as bibliotecas nativas do JInput apropriadas para o SO atual
-     */
+
     public static void loadJInputLibraries() {
         if (loaded) {
             System.out.println("✓ Bibliotecas nativas do JInput já foram carregadas");
@@ -59,10 +46,8 @@ public class NativeLibraryLoader {
                 return;
             }
             
-            // Cria diretório temporário para as bibliotecas nativas
             Path tempDir = createTempDirectory();
             
-            // Extrai cada biblioteca do JAR
             int extractedCount = 0;
             for (String libName : libraries) {
                 if (extractLibrary(libName, tempDir)) {
@@ -77,7 +62,6 @@ public class NativeLibraryLoader {
                 return;
             }
             
-            // Configura o java.library.path
             configureLibraryPath(tempDir);
             
             loaded = true;
@@ -90,10 +74,7 @@ public class NativeLibraryLoader {
             e.printStackTrace();
         }
     }
-    
-    /**
-     * Retorna as bibliotecas apropriadas para o sistema operacional
-     */
+
     private static String[] getLibrariesForPlatform(String osName, String osArch) {
         if (osName.contains("win")) {
             if (osArch.contains("64") || osArch.contains("amd64")) {
@@ -115,29 +96,20 @@ public class NativeLibraryLoader {
         
         return null;
     }
-    
-    /**
-     * Cria um diretório temporário para as bibliotecas nativas
-     */
+
     private static Path createTempDirectory() throws IOException {
         Path tempDir = Files.createTempDirectory("jinput-natives-");
         
-        // Marca para deletar ao sair da JVM
         tempDir.toFile().deleteOnExit();
         
         return tempDir;
     }
-    
-    /**
-     * Extrai uma biblioteca do JAR para o diretório temporário
-     */
+
     private static boolean extractLibrary(String libName, Path targetDir) {
         try {
-            // Tenta carregar do classpath (dentro do JAR, na pasta /native/)
             InputStream in = NativeLibraryLoader.class.getResourceAsStream("/native/" + libName);
             
             if (in == null) {
-                // Tenta da raiz do classpath
                 in = NativeLibraryLoader.class.getClassLoader().getResourceAsStream(libName);
             }
             
@@ -146,14 +118,11 @@ public class NativeLibraryLoader {
                 return false;
             }
             
-            // Cria arquivo de destino
             Path targetFile = targetDir.resolve(libName);
             
-            // Copia do JAR para o arquivo
             Files.copy(in, targetFile, StandardCopyOption.REPLACE_EXISTING);
             in.close();
             
-            // Marca arquivo para deletar ao sair
             targetFile.toFile().deleteOnExit();
             
             System.out.println("  ✓ Extraído: " + libName);
@@ -165,25 +134,17 @@ public class NativeLibraryLoader {
         }
     }
     
-    /**
-     * Configura o java.library.path para incluir o diretório das bibliotecas
-     */
     private static void configureLibraryPath(Path nativeDir) {
         try {
-            // Adiciona ao início do java.library.path
             String currentPath = System.getProperty("java.library.path", "");
             String newPath = nativeDir.toString() + File.pathSeparator + currentPath;
             System.setProperty("java.library.path", newPath);
             
-            // HACK: Força o ClassLoader a recarregar sys_paths
-            // Isso é necessário porque o java.library.path só é lido uma vez na inicialização
             try {
                 java.lang.reflect.Field fieldSysPath = ClassLoader.class.getDeclaredField("sys_paths");
                 fieldSysPath.setAccessible(true);
                 fieldSysPath.set(null, null);
             } catch (Exception e) {
-                // Falha silenciosa - em algumas versões do Java isso não funciona
-                // mas as bibliotecas já foram extraídas e o System.loadLibrary ainda pode funcionar
             }
             
         } catch (Exception e) {
@@ -191,9 +152,6 @@ public class NativeLibraryLoader {
         }
     }
     
-    /**
-     * Verifica se as bibliotecas já foram carregadas
-     */
     public static boolean isLoaded() {
         return loaded;
     }

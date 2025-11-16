@@ -4,16 +4,6 @@ import net.java.games.input.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * GamepadManager - Gerencia a detecção e leitura de gamepads conectados via USB/Bluetooth
- * usando a biblioteca JInput.
- * 
- * Funcionalidades:
- * - Detecta automaticamente gamepads conectados
- * - Lê continuamente o estado dos botões e eixos
- * - Permite configuração personalizada de mapeamento de botões
- * - Suporta múltiplos gamepads (usa o primeiro detectado por padrão)
- */
 public class GamepadManager {
     
     private Controller[] controllers;
@@ -27,12 +17,9 @@ public class GamepadManager {
     
     private GamepadInputListener inputListener;
     
-    // Threshold para eixos analógicos (direcional)
     private static final float DEFAULT_AXIS_THRESHOLD = 0.5f;
     
-    /**
-     * Interface para callbacks de eventos do gamepad
-     */
+   
     public interface GamepadInputListener {
         void onButtonPressed(MMU.Button button);
         void onButtonReleased(MMU.Button button);
@@ -44,49 +31,36 @@ public class GamepadManager {
         this.lastAxisValues = new ConcurrentHashMap<>();
         this.running = false;
         
-        // Configuração padrão de mapeamento (estilo Xbox/PlayStation)
         initializeDefaultMapping();
     }
     
-    /**
-     * Inicializa o mapeamento padrão de botões
-     */
     private void initializeDefaultMapping() {
-        // Botões padrão (índices comuns em gamepads)
-        // Switch Pro Controller geralmente usa:
-        // button_0 = B, button_1 = A, button_2 = Y, button_3 = X
         buttonMapping.put("button_0", MMU.Button.GAMEBOY_B);        // B (Switch) / A (Xbox) / Cross (PS)
         buttonMapping.put("button_1", MMU.Button.GAMEBOY_A);        // A (Switch) / B (Xbox) / Circle (PS)
         buttonMapping.put("button_2", MMU.Button.GAMEBOY_B);        // Y (Switch) / Y (Xbox) / Square (PS)
         buttonMapping.put("button_3", MMU.Button.GAMEBOY_A);        // X (Switch) / X (Xbox) / Triangle (PS)
         
-        // Botões de sistema
         buttonMapping.put("button_6", MMU.Button.GAMEBOY_SELECT);   // Select/Back/Minus
         buttonMapping.put("button_7", MMU.Button.GAMEBOY_START);    // Start/Plus
         buttonMapping.put("button_8", MMU.Button.GAMEBOY_SELECT);   // Select alternativo
         buttonMapping.put("button_9", MMU.Button.GAMEBOY_START);    // Start alternativo
         
-        // Gatilhos (L/R como alternativas)
         buttonMapping.put("button_4", MMU.Button.GAMEBOY_SELECT);   // L/LB
         buttonMapping.put("button_5", MMU.Button.GAMEBOY_START);    // R/RB
         
-        // Eixos direcionais principais (analógico esquerdo)
         buttonMapping.put("x_positive", MMU.Button.GAMEBOY_RIGHT);
         buttonMapping.put("x_negative", MMU.Button.GAMEBOY_LEFT);
         buttonMapping.put("y_positive", MMU.Button.GAMEBOY_DOWN);
         buttonMapping.put("y_negative", MMU.Button.GAMEBOY_UP);
         
-        // Variações de nomes de eixos
         buttonMapping.put("axis_x_positive", MMU.Button.GAMEBOY_RIGHT);
         buttonMapping.put("axis_x_negative", MMU.Button.GAMEBOY_LEFT);
         buttonMapping.put("axis_y_positive", MMU.Button.GAMEBOY_DOWN);
         buttonMapping.put("axis_y_negative", MMU.Button.GAMEBOY_UP);
         
-        // D-Pad via POV Hat (comum em controles)
         buttonMapping.put("pov_positive", MMU.Button.GAMEBOY_RIGHT);
         buttonMapping.put("pov_negative", MMU.Button.GAMEBOY_LEFT);
         
-        // Threshold padrão para todos os eixos
         axisThresholds.put("x", DEFAULT_AXIS_THRESHOLD);
         axisThresholds.put("y", DEFAULT_AXIS_THRESHOLD);
         axisThresholds.put("axis_x", DEFAULT_AXIS_THRESHOLD);

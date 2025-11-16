@@ -2,6 +2,7 @@ package com.meutcc.gbemulator;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.image.BufferStrategy;
 import java.awt.image.BufferedImage;
 import java.io.File;
 
@@ -13,7 +14,8 @@ public class GameBoyWindow extends JFrame {
     private static final int MIN_SCALE = 1;
     private static final double ASPECT_RATIO = (double) SCREEN_WIDTH / SCREEN_HEIGHT;
 
-    private final GameBoyScreenPanel screenPanel;
+    private final Canvas canvas;
+    private BufferStrategy bufferStrategy;
     private final GameBoy gameBoy;
     private Thread emulationThread;
     private volatile boolean running = false;
@@ -29,6 +31,9 @@ public class GameBoyWindow extends JFrame {
     // Configurações de vídeo
     private ScalingFilter currentScalingFilter = ScalingFilter.NEAREST_NEIGHBOR;
     private ScreenEffect screenEffect = new ScreenEffect();
+    
+    // Screen buffer
+    private BufferedImage screenBuffer;
 
     public GameBoyWindow() {
         setTitle("GameBoy Emulator TCC");
@@ -62,8 +67,16 @@ public class GameBoyWindow extends JFrame {
         // Inicializa gamepad support
         initializeGamepadSupport();
 
-        screenPanel = new GameBoyScreenPanel();
-        add(screenPanel, BorderLayout.CENTER);
+        // Cria Canvas para renderização com BufferStrategy
+        canvas = new Canvas();
+        canvas.setPreferredSize(new Dimension(SCREEN_WIDTH * DEFAULT_SCALE, SCREEN_HEIGHT * DEFAULT_SCALE));
+        canvas.setMinimumSize(new Dimension(SCREEN_WIDTH * MIN_SCALE, SCREEN_HEIGHT * MIN_SCALE));
+        canvas.setBackground(Color.BLACK);
+        canvas.setIgnoreRepaint(true); // Controle manual de renderização
+        add(canvas, BorderLayout.CENTER);
+        
+        // Inicializa screen buffer
+        screenBuffer = new BufferedImage(SCREEN_WIDTH, SCREEN_HEIGHT, BufferedImage.TYPE_INT_RGB);
 
         JMenuBar menuBar = new JMenuBar();
 
@@ -232,6 +245,10 @@ public class GameBoyWindow extends JFrame {
         setFocusable(true);
         pack();
         setLocationRelativeTo(null);
+        
+        // Inicializa BufferStrategy após a janela estar visível
+        canvas.createBufferStrategy(2); // Double buffering
+        bufferStrategy = canvas.getBufferStrategy();
     }
     
     private void addMenuPauseListeners(JMenu menu) {
@@ -302,7 +319,7 @@ public class GameBoyWindow extends JFrame {
     }
 
     private void setWindowSize(int scale) {
-        screenPanel.setPreferredSize(new Dimension(SCREEN_WIDTH * scale, SCREEN_HEIGHT * scale));
+        canvas.setPreferredSize(new Dimension(SCREEN_WIDTH * scale, SCREEN_HEIGHT * scale));
         pack();
         setLocationRelativeTo(null);
     }
@@ -459,7 +476,7 @@ public class GameBoyWindow extends JFrame {
                 
                 // Renderiza apenas se frame está completo
                 if (gameBoy.getPpu().isFrameCompleted()) {
-                    screenPanel.updateScreen(gameBoy.getPpu().getScreenBuffer());
+                    renderFrame(gameBoy.getPpu().getScreenBuffer());
                     actualFramesRendered++;
                 }
                 
@@ -881,7 +898,6 @@ public class GameBoyWindow extends JFrame {
      */
     private void setPalette(ColorPalette palette) {
         gameBoy.getPpu().setColorPalette(palette);
-        screenPanel.repaint();
     }
     
     /**
@@ -889,92 +905,92 @@ public class GameBoyWindow extends JFrame {
      */
     private void setScalingFilter(ScalingFilter filter) {
         currentScalingFilter = filter;
-        screenPanel.repaint();
         System.out.println("Filtro de escalonamento: " + filter.getDisplayName());
     }
-
-    private class GameBoyScreenPanel extends JPanel {
-        private BufferedImage screenBuffer;
-
-        public GameBoyScreenPanel() {
-            setPreferredSize(new Dimension(SCREEN_WIDTH * DEFAULT_SCALE, SCREEN_HEIGHT * DEFAULT_SCALE));
-            setMinimumSize(new Dimension(SCREEN_WIDTH * MIN_SCALE, SCREEN_HEIGHT * MIN_SCALE));
-            setBackground(Color.BLACK);
-            
-            this.screenBuffer = new BufferedImage(SCREEN_WIDTH, SCREEN_HEIGHT, BufferedImage.TYPE_INT_RGB);
-            Graphics2D g2d = this.screenBuffer.createGraphics();
-            g2d.setColor(Color.DARK_GRAY);
-            g2d.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-            g2d.dispose();
+    
+    /**
+     * Renderiza um frame diretamente no Canvas usando BufferStrategy
+     * Sincronização manual para evitar tearing e garantir suavidade
+     */
+    private void renderFrame(int[] pixelData) {
+        if (pixelData == null || pixelData.length != SCREEN_WIDTH * SCREEN_HEIGHT) {
+            return;
         }
-
-        public void updateScreen(int[] pixelData) {
-            if (pixelData != null && pixelData.length == SCREEN_WIDTH * SCREEN_HEIGHT) {
-                screenBuffer.setRGB(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, pixelData, 0, SCREEN_WIDTH);
-            }
-            repaint();
-        }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
+        
+        // Atualiza o screen buffer
+        screenBuffer.setRGB(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, pixelData, 0, SCREEN_WIDTH);
+        
+        // Renderiza usando BufferStrategy
+        do {
+            do {
+                Graphics2D g2d = (Graphics2D) bufferStrategy.getDrawGraphics();
+                try {
+                    // Limpa o canvas
+                    g2d.setColor(Color.BLACK);
+                    g2d.fillRect(0, 0, canvas.getWidth(), canvas.getHeight());
+                    
+                    // Aplica o filtro de escalonamento
+                    g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, 
+                        currentScalingFilter.getRenderingHintValue());
+                    
+                    if (currentScalingFilter == ScalingFilter.NEAREST_NEIGHBOR) {
+                        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+                        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
+                    } else {
+                        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+                    }
+                    
+                    // Calcula dimensões mantendo aspect ratio
+                    int canvasWidth = canvas.getWidth();
+                    int canvasHeight = canvas.getHeight();
+                    
+                    int scaledWidth = canvasWidth;
+                    int scaledHeight = (int) (canvasWidth / ASPECT_RATIO);
+                    
+                    if (scaledHeight > canvasHeight) {
+                        scaledHeight = canvasHeight;
+                        scaledWidth = (int) (canvasHeight * ASPECT_RATIO);
+                    }
+                    
+                    int scale = Math.max(1, Math.min(scaledWidth / SCREEN_WIDTH, scaledHeight / SCREEN_HEIGHT));
+                    scaledWidth = SCREEN_WIDTH * scale;
+                    scaledHeight = SCREEN_HEIGHT * scale;
+                    
+                    int x = (canvasWidth - scaledWidth) / 2;
+                    int y = (canvasHeight - scaledHeight) / 2;
+                    
+                    // Aplica ghosting se habilitado
+                    BufferedImage frameToRender = screenBuffer;
+                    if (screenEffect.isGhostingEnabled()) {
+                        frameToRender = screenEffect.applyEffects(screenBuffer, scaledWidth, scaledHeight);
+                    }
+                    
+                    // Desenha a imagem principal
+                    g2d.drawImage(frameToRender, x, y, scaledWidth, scaledHeight, null);
+                    
+                    // Aplica scanlines se habilitado
+                    if (screenEffect.isScanlinesEnabled()) {
+                        screenEffect.drawScanlines(g2d, x, y, scaledWidth, scaledHeight);
+                    }
+                    
+                    // Aplica grid lines se habilitado
+                    if (screenEffect.isGridEnabled()) {
+                        screenEffect.drawGridLines(g2d, x, y, scaledWidth, scaledHeight, 
+                            SCREEN_WIDTH, SCREEN_HEIGHT);
+                    }
+                } finally {
+                    g2d.dispose();
+                }
+            } while (bufferStrategy.contentsRestored());
             
-            if (screenBuffer == null) return;
+            // Mostra o buffer (sincronizado)
+            bufferStrategy.show();
             
-            Graphics2D g2d = (Graphics2D) g;
-            
-            // Aplica o filtro de escalonamento selecionado
-            g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, 
-                currentScalingFilter.getRenderingHintValue());
-            
-            // Desabilita antialiasing para manter pixels nítidos com Nearest Neighbor
-            if (currentScalingFilter == ScalingFilter.NEAREST_NEIGHBOR) {
-                g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
-                g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
-            } else {
-                g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-            }
-            
-            int panelWidth = getWidth();
-            int panelHeight = getHeight();
-            
-            int scaledWidth, scaledHeight;
-            
-            scaledWidth = panelWidth;
-            scaledHeight = (int) (panelWidth / ASPECT_RATIO);
-            
-            if (scaledHeight > panelHeight) {
-                scaledHeight = panelHeight;
-                scaledWidth = (int) (panelHeight * ASPECT_RATIO);
-            }
-            
-            int scale = Math.max(1, Math.min(scaledWidth / SCREEN_WIDTH, scaledHeight / SCREEN_HEIGHT));
-            scaledWidth = SCREEN_WIDTH * scale;
-            scaledHeight = SCREEN_HEIGHT * scale;
-            
-            int x = (panelWidth - scaledWidth) / 2;
-            int y = (panelHeight - scaledHeight) / 2;
-            
-            // Aplica ghosting se habilitado
-            BufferedImage frameToRender = screenBuffer;
-            if (screenEffect.isGhostingEnabled()) {
-                frameToRender = screenEffect.applyEffects(screenBuffer, scaledWidth, scaledHeight);
-            }
-            
-            // Desenha a imagem principal
-            g2d.drawImage(frameToRender, x, y, scaledWidth, scaledHeight, null);
-            
-            // Aplica scanlines se habilitado
-            if (screenEffect.isScanlinesEnabled()) {
-                screenEffect.drawScanlines(g2d, x, y, scaledWidth, scaledHeight);
-            }
-            
-            // Aplica grid lines se habilitado
-            if (screenEffect.isGridEnabled()) {
-                screenEffect.drawGridLines(g2d, x, y, scaledWidth, scaledHeight, 
-                    SCREEN_WIDTH, SCREEN_HEIGHT);
-            }
-        }
+        } while (bufferStrategy.contentsLost());
+        
+        // Sincroniza com o sistema de janelas (reduz tearing)
+        Toolkit.getDefaultToolkit().sync();
     }
+
 }

@@ -85,7 +85,7 @@ public class PPU {
     private boolean enablePixelFifo; 
     private PixelInfo[] currentScanlineBuffer; 
 
-    private MMU mmu; // Referência à MMU para solicitar interrupções
+    private MMU mmu;
 
     public PPU() {
         reset();
@@ -98,7 +98,7 @@ public class PPU {
     public void reset() {
         Arrays.fill(vram, (byte) 0);
         Arrays.fill(oam, (byte) 0);
-        Arrays.fill(screenBuffer, getColors()[0]); // Tela branca
+        Arrays.fill(screenBuffer, getColors()[0]);
         frameCompleted = false;
 
         lcdc = 0x91; 
@@ -148,16 +148,16 @@ public class PPU {
         cyclesCounter++;
         
         switch (ppuMode) {
-            case 2: // OAM Scan
+            case 2: 
                 updateOamScanMode();
                 break;
-            case 3: // Drawing
+            case 3: 
                 updateDrawingMode();
                 break;
-            case 0: // H-Blank
+            case 0: 
                 updateHBlankMode();
                 break;
-            case 1: // V-Blank
+            case 1: 
                 updateVBlankMode();
                 break;
         }
@@ -843,10 +843,6 @@ public class PPU {
             System.out.println("Paleta alterada para: " + palette.getDisplayName());
         }
     }
-    
-    /**
-     * Retorna a paleta de cores atual
-     */
     public ColorPalette getColorPalette() {
         return currentPalette;
     }
@@ -1088,26 +1084,21 @@ public class PPU {
         cyclesCounter = dis.readInt();
         frameCompleted = dis.readBoolean();
         
-        // Load state v2: Color Palette (compatibilidade com v1)
         try {
             String paletteName = dis.readUTF();
             currentPalette = ColorPalette.valueOf(ColorPalette.class, paletteName);
         } catch (java.io.EOFException e) {
-            // Save state v1 - usa paleta padrão
             currentPalette = ColorPalette.DMG_GREEN;
         } catch (IllegalArgumentException e) {
-            // Paleta inválida - usa padrão
             currentPalette = ColorPalette.DMG_GREEN;
         }
         
-        // Load state v2: Advanced PPU timing (compatibilidade com v1)
         try {
             scanlineCycles = dis.readInt();
             statInterruptLine = dis.readBoolean();
             mode3Duration = dis.readInt();
             windowLineCounter = dis.readInt();
         } catch (java.io.EOFException e) {
-            // Save state v1 - usa valores padrão
             scanlineCycles = 0;
             statInterruptLine = false;
             mode3Duration = MODE_3_BASE_CYCLES;

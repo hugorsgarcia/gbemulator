@@ -13,7 +13,6 @@ public class CameraEmulator implements Serial.SerialDevice {
    
     private byte[][] capturedImage = new byte[CAMERA_HEIGHT][CAMERA_WIDTH];
     
-    // Estado da comunicação
     private enum State {
         IDLE,
         WAITING_COMMAND,
@@ -39,7 +38,6 @@ public class CameraEmulator implements Serial.SerialDevice {
     private void generateDefaultImage() {
         for (int y = 0; y < CAMERA_HEIGHT; y++) {
             for (int x = 0; x < CAMERA_WIDTH; x++) {
-                // Gradiente diagonal
                 int value = ((x + y) * 255) / (CAMERA_WIDTH + CAMERA_HEIGHT);
                 capturedImage[y][x] = (byte) (value & 0xFF);
             }

@@ -74,11 +74,10 @@ public class NetworkLinkCable implements Serial.SerialDevice {
         isServer = false;
         System.out.println("Network Link: Conectando a " + host + ":" + port + "...");
         
-        // Thread para conectar sem bloquear
         new Thread(() -> {
             try {
                 socket = new Socket();
-                socket.connect(new InetSocketAddress(host, port), 5000); // Timeout de 5s
+                socket.connect(new InetSocketAddress(host, port), 5000); 
                 setupConnection();
                 
                 System.out.println("Network Link: Conectado a " + host + ":" + port);
