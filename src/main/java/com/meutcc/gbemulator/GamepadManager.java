@@ -357,10 +357,24 @@ public class GamepadManager {
     }
     
     /**
-     * Define o mapeamento customizado de um botão/eixo
+     * Define o mapeamento customizado de um botão/eixo (substitui se já existir)
      */
     public void setButtonMapping(String componentId, MMU.Button button) {
         buttonMapping.put(componentId.toLowerCase(), button);
+    }
+    
+    /**
+     * Adiciona um mapeamento sem remover os existentes para o mesmo botão
+     */
+    public void addButtonMapping(String componentId, MMU.Button button) {
+        buttonMapping.put(componentId.toLowerCase(), button);
+    }
+    
+    /**
+     * Remove todos os mapeamentos para um botão específico do Game Boy
+     */
+    public void removeButtonMappings(MMU.Button button) {
+        buttonMapping.entrySet().removeIf(entry -> entry.getValue() == button);
     }
     
     /**
