@@ -207,6 +207,19 @@ public class Cartridge {
     public void write(int address, byte value) {
         mbc.write(address, value);
     }
+    
+    // Save/Load state methods
+    public void saveState(java.io.DataOutputStream dos) throws java.io.IOException {
+        if (mbc != null) {
+            mbc.saveState(dos);
+        }
+    }
+    
+    public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
+        if (mbc != null) {
+            mbc.loadState(dis);
+        }
+    }
 
     public int readRam(int address) {
         return mbc.readRam(address);
@@ -273,6 +286,18 @@ class MBC2 extends AbstractMBC {
         if (ramData != null && ramAddress < ramData.length) {
             ramData[ramAddress] = (byte)(value & 0x0F); 
         }
+    }
+    
+    @Override
+    public void saveState(java.io.DataOutputStream dos) throws java.io.IOException {
+        super.saveState(dos);
+        dos.writeInt(romBank);
+    }
+    
+    @Override
+    public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
+        super.loadState(dis);
+        romBank = dis.readInt();
     }
 }
 
@@ -433,6 +458,38 @@ class MBC3 extends AbstractMBC {
             System.out.println("RTC data loaded with " + elapsedSeconds + " seconds elapsed.");
         }
     }
+    
+    @Override
+    public void saveState(java.io.DataOutputStream dos) throws java.io.IOException {
+        super.saveState(dos);
+        dos.writeInt(romBank);
+        dos.writeInt(ramBankOrRtcRegister);
+        dos.writeLong(rtcLastUpdateTime);
+        dos.writeInt(latchState);
+        // Save RTC registers
+        for (int i = 0; i < 5; i++) {
+            dos.writeByte(rtcRegisters[i]);
+        }
+        for (int i = 0; i < 5; i++) {
+            dos.writeByte(rtcLatchedRegisters[i]);
+        }
+    }
+    
+    @Override
+    public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
+        super.loadState(dis);
+        romBank = dis.readInt();
+        ramBankOrRtcRegister = dis.readInt();
+        rtcLastUpdateTime = dis.readLong();
+        latchState = dis.readInt();
+        // Load RTC registers
+        for (int i = 0; i < 5; i++) {
+            rtcRegisters[i] = dis.readByte();
+        }
+        for (int i = 0; i < 5; i++) {
+            rtcLatchedRegisters[i] = dis.readByte();
+        }
+    }
 }
 
 
@@ -485,6 +542,20 @@ class MBC5 extends AbstractMBC {
         if (ramData != null && mappedAddress < ramData.length) {
             ramData[mappedAddress] = value;
         }
+    }
+    
+    @Override
+    public void saveState(java.io.DataOutputStream dos) throws java.io.IOException {
+        super.saveState(dos);
+        dos.writeInt(romBank);
+        dos.writeInt(ramBank);
+    }
+    
+    @Override
+    public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
+        super.loadState(dis);
+        romBank = dis.readInt();
+        ramBank = dis.readInt();
     }
 }
 
@@ -541,6 +612,15 @@ abstract class AbstractMBC implements MemoryBankController {
 
     protected abstract int readRamBank(int address);
     protected abstract void writeRamBank(int address, byte value);
+    
+    // Save/Load state methods
+    public void saveState(java.io.DataOutputStream dos) throws java.io.IOException {
+        dos.writeBoolean(ramEnabled);
+    }
+    
+    public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
+        ramEnabled = dis.readBoolean();
+    }
 }
 
 class Mbc0RomOnly extends AbstractMBC {
@@ -646,5 +726,21 @@ class MBC1 extends AbstractMBC {
         if (ramData != null && mappedAddress < ramData.length) {
             ramData[mappedAddress] = value;
         }
+    }
+    
+    @Override
+    public void saveState(java.io.DataOutputStream dos) throws java.io.IOException {
+        super.saveState(dos);
+        dos.writeInt(romBank);
+        dos.writeInt(ramBank);
+        dos.writeInt(bankingMode);
+    }
+    
+    @Override
+    public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
+        super.loadState(dis);
+        romBank = dis.readInt();
+        ramBank = dis.readInt();
+        bankingMode = dis.readInt();
     }
 }

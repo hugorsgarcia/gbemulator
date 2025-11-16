@@ -99,8 +99,8 @@ public class GameBoy {
         try (DataOutputStream dos = new DataOutputStream(
                 new BufferedOutputStream(new FileOutputStream(filePath)))) {
             
-            dos.writeInt(0x47425353);
-            dos.writeInt(1);
+            dos.writeInt(0x47425353); // Magic: "GBSS"
+            dos.writeInt(2); // Version 2
             
             dos.writeInt(cpu.getA());
             dos.writeInt(cpu.getB());
@@ -133,9 +133,11 @@ public class GameBoy {
             }
             
             int version = dis.readInt();
-            if (version != 1) {
+            if (version < 1 || version > 2) {
                 throw new IOException("Versão de save state não suportada: " + version);
             }
+            
+            System.out.println("Carregando save state versão " + version);
             
             cpu.setA(dis.readInt());
             cpu.setB(dis.readInt());

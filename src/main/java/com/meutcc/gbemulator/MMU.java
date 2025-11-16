@@ -485,6 +485,7 @@ public class MMU {
         dos.writeByte(memory[REG_IF]);
         dos.writeByte(memory[REG_IE]);
         serial.saveState(dos);
+        cartridge.saveState(dos);
     }
 
     public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
@@ -501,5 +502,6 @@ public class MMU {
         memory[REG_IF] = dis.readByte();
         memory[REG_IE] = dis.readByte();
         serial.loadState(dis);
+        cartridge.loadState(dis);
     }
 }

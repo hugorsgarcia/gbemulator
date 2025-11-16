@@ -1055,6 +1055,15 @@ public class PPU {
         dos.writeInt(ppuMode);
         dos.writeInt(cyclesCounter);
         dos.writeBoolean(frameCompleted);
+        
+        // Save state v2: Color Palette
+        dos.writeUTF(currentPalette.name());
+        
+        // Save state v2: Advanced PPU timing
+        dos.writeInt(scanlineCycles);
+        dos.writeBoolean(statInterruptLine);
+        dos.writeInt(mode3Duration);
+        dos.writeInt(windowLineCounter);
     }
 
     public void loadState(java.io.DataInputStream dis) throws java.io.IOException {
@@ -1078,5 +1087,31 @@ public class PPU {
         ppuMode = dis.readInt();
         cyclesCounter = dis.readInt();
         frameCompleted = dis.readBoolean();
+        
+        // Load state v2: Color Palette (compatibilidade com v1)
+        try {
+            String paletteName = dis.readUTF();
+            currentPalette = ColorPalette.valueOf(ColorPalette.class, paletteName);
+        } catch (java.io.EOFException e) {
+            // Save state v1 - usa paleta padrão
+            currentPalette = ColorPalette.DMG_GREEN;
+        } catch (IllegalArgumentException e) {
+            // Paleta inválida - usa padrão
+            currentPalette = ColorPalette.DMG_GREEN;
+        }
+        
+        // Load state v2: Advanced PPU timing (compatibilidade com v1)
+        try {
+            scanlineCycles = dis.readInt();
+            statInterruptLine = dis.readBoolean();
+            mode3Duration = dis.readInt();
+            windowLineCounter = dis.readInt();
+        } catch (java.io.EOFException e) {
+            // Save state v1 - usa valores padrão
+            scanlineCycles = 0;
+            statInterruptLine = false;
+            mode3Duration = MODE_3_BASE_CYCLES;
+            windowLineCounter = 0;
+        }
     }
 }
