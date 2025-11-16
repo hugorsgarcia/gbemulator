@@ -19,6 +19,10 @@ public class GameBoyWindow extends JFrame {
     private volatile boolean running = false;
     private volatile boolean paused = false;
     private final InputHandler inputHandler;
+    
+    // Gamepad support
+    private GamepadManager gamepadManager;
+    private GamepadInputHandler gamepadInputHandler;
 
     private boolean globalSoundEnabled = true;
 
@@ -50,6 +54,9 @@ public class GameBoyWindow extends JFrame {
         gameBoy = new GameBoy();
         gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
         inputHandler = new InputHandler(gameBoy.getMmu());
+        
+        // Inicializa gamepad support
+        initializeGamepadSupport();
 
         screenPanel = new GameBoyScreenPanel();
         add(screenPanel, BorderLayout.CENTER);
@@ -85,6 +92,20 @@ public class GameBoyWindow extends JFrame {
         JMenuItem showControlsItem = new JMenuItem("Exibir Controles do Teclado");
         showControlsItem.addActionListener(e -> showControlMapping());
         controlMenu.add(showControlsItem);
+        
+        controlMenu.addSeparator();
+        
+        JMenuItem configGamepadItem = new JMenuItem("Configurar Gamepad...");
+        configGamepadItem.addActionListener(e -> showGamepadConfig());
+        controlMenu.add(configGamepadItem);
+        
+        JCheckBoxMenuItem enableGamepadItem = new JCheckBoxMenuItem("Habilitar Gamepad", false);
+        enableGamepadItem.addActionListener(e -> {
+            boolean enabled = enableGamepadItem.isSelected();
+            setGamepadEnabled(enabled);
+        });
+        controlMenu.add(enableGamepadItem);
+        
         menuBar.add(controlMenu);
 
         // Menu "Som"
@@ -443,9 +464,111 @@ public class GameBoyWindow extends JFrame {
         } else {
             System.out.println("APU or GameBoy instance was null during dispose, skipping APU close.");
         }
+        
+        // Shutdown gamepad
+        if (gamepadManager != null) {
+            System.out.println("Shutting down gamepad manager...");
+            gamepadManager.shutdown();
+        }
 
         super.dispose();
         System.out.println("GameBoyWindow disposed.");
+    }
+    
+    // ==================== Gamepad Support ====================
+    
+    /**
+     * Inicializa o suporte a gamepads
+     */
+    private void initializeGamepadSupport() {
+        try {
+            gamepadManager = new GamepadManager();
+            gamepadInputHandler = new GamepadInputHandler(gameBoy.getMmu());
+            
+            // Por padrão, desabilitado até o usuário configurar
+            gamepadInputHandler.setEnabled(false);
+            
+            System.out.println("Suporte a gamepad inicializado. Use o menu Controle para configurar.");
+        } catch (NoClassDefFoundError e) {
+            System.err.println("Biblioteca JInput não encontrada. Suporte a gamepad desabilitado.");
+            System.err.println("Para usar gamepads, instale JInput 2.0.9 ou superior.");
+            gamepadManager = null;
+            gamepadInputHandler = null;
+        } catch (Exception e) {
+            System.err.println("Erro ao inicializar gamepad: " + e.getMessage());
+            gamepadManager = null;
+            gamepadInputHandler = null;
+        }
+    }
+    
+    /**
+     * Abre o diálogo de configuração de gamepad
+     */
+    private void showGamepadConfig() {
+        if (gamepadManager == null) {
+            JOptionPane.showMessageDialog(this,
+                "Suporte a gamepad não está disponível.\n\n" +
+                "Para usar gamepads, você precisa instalar a biblioteca JInput:\n" +
+                "1. Baixe jinput-2.0.9.jar e jinput-platform-2.0.9-natives-all.jar\n" +
+                "2. Adicione os JARs ao classpath do projeto\n" +
+                "3. Reinicie o emulador\n\n" +
+                "Veja o README.md para instruções detalhadas.",
+                "JInput não encontrado",
+                JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        
+        GamepadConfigDialog dialog = new GamepadConfigDialog(this, gamepadManager);
+        dialog.setVisible(true);
+    }
+    
+    /**
+     * Habilita ou desabilita o input do gamepad
+     */
+    private void setGamepadEnabled(boolean enabled) {
+        if (gamepadManager == null || gamepadInputHandler == null) {
+            JOptionPane.showMessageDialog(this,
+                "Suporte a gamepad não está disponível.\n" +
+                "Instale a biblioteca JInput para usar gamepads.",
+                "Gamepad não disponível",
+                JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        
+        if (enabled) {
+            // Verifica se há gamepad conectado
+            if (!gamepadManager.hasActiveGamepad()) {
+                gamepadManager.detectGamepads();
+            }
+            
+            if (!gamepadManager.hasActiveGamepad()) {
+                JOptionPane.showMessageDialog(this,
+                    "Nenhum gamepad detectado.\n" +
+                    "Conecte um gamepad e tente novamente.",
+                    "Gamepad não encontrado",
+                    JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            
+            // Inicia polling do gamepad
+            gamepadInputHandler.setEnabled(true);
+            gamepadManager.startPolling(gamepadInputHandler);
+            
+            System.out.println("Gamepad habilitado: " + gamepadManager.getActiveGamepad().getName());
+            JOptionPane.showMessageDialog(this,
+                "Gamepad habilitado!\n\n" +
+                "Gamepad ativo: " + gamepadManager.getActiveGamepad().getName() + "\n\n" +
+                "Use 'Configurar Gamepad' no menu para personalizar os botões.",
+                "Gamepad Ativado",
+                JOptionPane.INFORMATION_MESSAGE);
+        } else {
+            // Desabilita gamepad
+            gamepadManager.stopPolling();
+            gamepadInputHandler.setEnabled(false);
+            gamepadInputHandler.releaseAllButtons();
+            
+            System.out.println("Gamepad desabilitado.");
+        }
     }
     
     // ==================== Link Cable / Multiplayer / Periféricos ====================

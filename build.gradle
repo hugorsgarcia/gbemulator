@@ -1,0 +1,47 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.meutcc'
+version = '2.0'
+
+sourceCompatibility = '21'
+targetCompatibility = '21'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // JInput para suporte a gamepads
+    implementation 'net.java.jinput:jinput:2.0.9'
+    
+    // Dependências para testes (opcional)
+    testImplementation 'junit:junit:4.13.2'
+}
+
+application {
+    mainClass = 'com.meutcc.gbemulator.Main'
+}
+
+// Configuração para empacotar todas as dependências em um único JAR
+jar {
+    manifest {
+        attributes(
+            'Main-Class': 'com.meutcc.gbemulator.Main'
+        )
+    }
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Tarefas personalizadas
+task runEmulator(type: JavaExec) {
+    group = 'application'
+    description = 'Executa o emulador Game Boy'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.meutcc.gbemulator.Main'
+}

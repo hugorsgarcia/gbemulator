@@ -4,27 +4,13 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.*;
 
-/**
- * Emulador básico do Game Boy Camera.
- * 
- * O Game Boy Camera é um cartucho com câmera integrada que permite
- * tirar fotos em 128x112 pixels (4 tons de cinza).
- * 
- * Esta implementação simplificada:
- * - Carrega imagens de arquivo para simular captura
- * - Converte para formato Game Boy (4 cores, 128x112)
- * - Responde aos comandos do jogo
- * 
- * Nota: Captura de webcam real requereria bibliotecas externas
- * (JavaCV, Webcam-Capture, etc) e não está implementada aqui.
- */
 public class CameraEmulator implements Serial.SerialDevice {
     
-    // Dimensões da câmera Game Boy
+    
     private static final int CAMERA_WIDTH = 128;
     private static final int CAMERA_HEIGHT = 112;
     
-    // Imagem capturada (em escala de cinza)
+   
     private byte[][] capturedImage = new byte[CAMERA_HEIGHT][CAMERA_WIDTH];
     
     // Estado da comunicação
@@ -39,21 +25,17 @@ public class CameraEmulator implements Serial.SerialDevice {
     private int command = 0;
     private int dataIndex = 0;
     
-    // Comandos do Game Boy Camera (valores aproximados)
     private static final int CMD_INIT = 0x01;
     private static final int CMD_CAPTURE = 0x02;
     private static final int CMD_GET_DATA = 0x03;
     private static final int CMD_STATUS = 0x0F;
     
     public CameraEmulator() {
-        // Inicializar com imagem padrão (gradiente)
         generateDefaultImage();
         System.out.println("Camera: Inicializada com imagem padrão");
     }
     
-    /**
-     * Gera uma imagem padrão (gradiente) para testes.
-     */
+ 
     private void generateDefaultImage() {
         for (int y = 0; y < CAMERA_HEIGHT; y++) {
             for (int x = 0; x < CAMERA_WIDTH; x++) {
@@ -64,10 +46,6 @@ public class CameraEmulator implements Serial.SerialDevice {
         }
     }
     
-    /**
-     * Carrega uma imagem de arquivo e converte para formato Game Boy.
-     * @param imagePath Caminho para o arquivo de imagem
-     */
     public boolean loadImage(String imagePath) {
         try {
             BufferedImage img = ImageIO.read(new File(imagePath));
@@ -77,13 +55,11 @@ public class CameraEmulator implements Serial.SerialDevice {
                 return false;
             }
             
-            // Redimensionar para 128x112 se necessário
             BufferedImage resized = new BufferedImage(CAMERA_WIDTH, CAMERA_HEIGHT, BufferedImage.TYPE_BYTE_GRAY);
             java.awt.Graphics2D g = resized.createGraphics();
             g.drawImage(img, 0, 0, CAMERA_WIDTH, CAMERA_HEIGHT, null);
             g.dispose();
             
-            // Converter para array de bytes (escala de cinza)
             for (int y = 0; y < CAMERA_HEIGHT; y++) {
                 for (int x = 0; x < CAMERA_WIDTH; x++) {
                     int rgb = resized.getRGB(x, y);
@@ -101,10 +77,6 @@ public class CameraEmulator implements Serial.SerialDevice {
         }
     }
     
-    /**
-     * Define uma imagem customizada.
-     * @param imageData Array 112x128 de valores 0-255 (escala de cinza)
-     */
     public void setImage(byte[][] imageData) {
         if (imageData.length != CAMERA_HEIGHT || imageData[0].length != CAMERA_WIDTH) {
             throw new IllegalArgumentException("Imagem deve ser " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
@@ -116,27 +88,16 @@ public class CameraEmulator implements Serial.SerialDevice {
         
         System.out.println("Camera: Imagem customizada definida");
     }
-    
-    /**
-     * Simula captura de foto (na prática, usa a imagem já carregada).
-     */
+
     public void capture() {
         System.out.println("Camera: Foto capturada (simulada)");
-        // Em uma implementação real com webcam, aqui seria feita a captura
-        // Por exemplo, usando bibliotecas como:
-        // - Webcam-Capture: https://github.com/sarxos/webcam-capture
-        // - JavaCV: https://github.com/bytedeco/javacv
     }
     
-    /**
-     * Converte valor de escala de cinza (0-255) para cor Game Boy (0-3).
-     */
     private int grayToGameBoyColor(int gray) {
-        // Quantizar 256 tons para 4 tons
-        if (gray < 64) return 0;  // Mais escuro
+        if (gray < 64) return 0; 
         if (gray < 128) return 1;
         if (gray < 192) return 2;
-        return 3; // Mais claro
+        return 3;
     }
     
     @Override
@@ -169,7 +130,6 @@ public class CameraEmulator implements Serial.SerialDevice {
                 }
                 
             case SENDING_DATA:
-                // Enviar pixels da imagem
                 if (dataIndex < CAMERA_WIDTH * CAMERA_HEIGHT) {
                     int y = dataIndex / CAMERA_WIDTH;
                     int x = dataIndex % CAMERA_WIDTH;
@@ -196,9 +156,6 @@ public class CameraEmulator implements Serial.SerialDevice {
         }
     }
     
-    /**
-     * Salva a imagem atual em arquivo.
-     */
     public boolean saveImage(String outputPath) {
         try {
             BufferedImage img = new BufferedImage(CAMERA_WIDTH, CAMERA_HEIGHT, BufferedImage.TYPE_BYTE_GRAY);
@@ -220,10 +177,6 @@ public class CameraEmulator implements Serial.SerialDevice {
             return false;
         }
     }
-    
-    /**
-     * Reseta a câmera.
-     */
     public void reset() {
         state = State.IDLE;
         dataIndex = 0;
