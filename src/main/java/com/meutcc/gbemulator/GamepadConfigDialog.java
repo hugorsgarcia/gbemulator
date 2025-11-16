@@ -44,6 +44,7 @@ public class GamepadConfigDialog extends JDialog {
         this.gamepadManager = gamepadManager;
         this.mappingButtons = new HashMap<>();
         this.testLabels = new HashMap<>();
+        this.gamepadComboBox = new JComboBox<>(); // Inicializa ANTES de criar painéis
         
         setLayout(new BorderLayout(10, 10));
         setSize(700, 600);
@@ -76,8 +77,6 @@ public class GamepadConfigDialog extends JDialog {
                 stopTestTimer();
             }
         });
-        
-        gamepadComboBox = new JComboBox<>();
     }
     
    
@@ -88,20 +87,18 @@ public class GamepadConfigDialog extends JDialog {
         JLabel label = new JLabel("Gamepad:");
         label.setFont(label.getFont().deriveFont(Font.BOLD));
         
-        JComboBox<String> comboBox = new JComboBox<>();
-        comboBox.addActionListener(e -> onGamepadSelected(comboBox.getSelectedIndex()));
+        // Usa o gamepadComboBox já inicializado
+        gamepadComboBox.addActionListener(e -> onGamepadSelected(gamepadComboBox.getSelectedIndex()));
         
         JButton detectButton = new JButton("Detectar Gamepads");
         detectButton.addActionListener(e -> detectAndPopulateGamepads());
         
         JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         leftPanel.add(label);
-        leftPanel.add(comboBox);
+        leftPanel.add(gamepadComboBox);
         
         panel.add(leftPanel, BorderLayout.WEST);
         panel.add(detectButton, BorderLayout.EAST);
-        
-        panel.putClientProperty("comboBox", comboBox);
         
         return panel;
     }
@@ -205,13 +202,10 @@ public class GamepadConfigDialog extends JDialog {
     private void detectAndPopulateGamepads() {
         List<Controller> gamepads = gamepadManager.detectGamepads();
         
-        JComboBox<String> comboBox = findComboBox();
-        if (comboBox == null) return;
-        
-        comboBox.removeAllItems();
+        gamepadComboBox.removeAllItems();
         
         if (gamepads.isEmpty()) {
-            comboBox.addItem("Nenhum gamepad detectado");
+            gamepadComboBox.addItem("Nenhum gamepad detectado");
             JOptionPane.showMessageDialog(this,
                 "Nenhum gamepad foi detectado.\n" +
                 "Verifique se o gamepad está conectado e funcionando.\n\n" +
@@ -220,14 +214,14 @@ public class GamepadConfigDialog extends JDialog {
                 JOptionPane.WARNING_MESSAGE);
         } else {
             for (Controller gamepad : gamepads) {
-                comboBox.addItem(gamepad.getName());
+                gamepadComboBox.addItem(gamepad.getName());
             }
             
             if (gamepadManager.hasActiveGamepad()) {
                 String activeName = gamepadManager.getActiveGamepad().getName();
-                for (int i = 0; i < comboBox.getItemCount(); i++) {
-                    if (comboBox.getItemAt(i).equals(activeName)) {
-                        comboBox.setSelectedIndex(i);
+                for (int i = 0; i < gamepadComboBox.getItemCount(); i++) {
+                    if (gamepadComboBox.getItemAt(i).equals(activeName)) {
+                        gamepadComboBox.setSelectedIndex(i);
                         break;
                     }
                 }
@@ -235,20 +229,6 @@ public class GamepadConfigDialog extends JDialog {
         }
         
         updateMappingDisplay();
-    }
-    
-    @SuppressWarnings("unchecked")
-    private JComboBox<String> findComboBox() {
-        java.awt.Component[] components = ((JPanel) getContentPane().getComponent(0)).getComponents();
-        for (java.awt.Component comp : components) {
-            if (comp instanceof JPanel) {
-                Object prop = ((JPanel) comp).getClientProperty("comboBox");
-                if (prop instanceof JComboBox) {
-                    return (JComboBox<String>) prop;
-                }
-            }
-        }
-        return null;
     }
     
     private void onGamepadSelected(int index) {
@@ -264,7 +244,8 @@ public class GamepadConfigDialog extends JDialog {
             // Cancela mapeamento anterior
             JButton oldButton = mappingButtons.get(buttonBeingMapped);
             if (oldButton != null) {
-                updateMappingDisplay();
+                oldButton.setText("Não mapeado");
+                oldButton.setBackground(null);
             }
         }
         
@@ -273,13 +254,17 @@ public class GamepadConfigDialog extends JDialog {
         displayButton.setBackground(Color.YELLOW);
         
         new Thread(() -> {
-            if (waitForGamepadInput(button)) {
-                SwingUtilities.invokeLater(() -> {
-                    displayButton.setBackground(null);
-                    updateMappingDisplay();
-                    buttonBeingMapped = null;
-                });
-            }
+            boolean success = waitForGamepadInput(button);
+            SwingUtilities.invokeLater(() -> {
+                displayButton.setBackground(null);
+                if (success) {
+                    // Atualiza apenas o botão que foi mapeado
+                    updateSingleButtonDisplay(button);
+                } else {
+                    displayButton.setText("Timeout - tente novamente");
+                }
+                buttonBeingMapped = null;
+            });
         }).start();
     }
     
@@ -339,6 +324,25 @@ public class GamepadConfigDialog extends JDialog {
             MMU.Button button = entry.getKey();
             JButton displayButton = entry.getValue();
             
+            String mapped = reverseMapping.get(button);
+            if (mapped != null) {
+                displayButton.setText(formatComponentName(mapped));
+            } else {
+                displayButton.setText("Não mapeado");
+            }
+        }
+    }
+    
+    private void updateSingleButtonDisplay(MMU.Button button) {
+        Map<String, MMU.Button> mapping = gamepadManager.getButtonMapping();
+        Map<MMU.Button, String> reverseMapping = new HashMap<>();
+        
+        for (Map.Entry<String, MMU.Button> entry : mapping.entrySet()) {
+            reverseMapping.put(entry.getValue(), entry.getKey());
+        }
+        
+        JButton displayButton = mappingButtons.get(button);
+        if (displayButton != null) {
             String mapped = reverseMapping.get(button);
             if (mapped != null) {
                 displayButton.setText(formatComponentName(mapped));
