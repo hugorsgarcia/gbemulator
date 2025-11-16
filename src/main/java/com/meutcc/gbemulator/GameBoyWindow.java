@@ -417,32 +417,33 @@ public class GameBoyWindow extends JFrame {
 
     private void emulationLoop() {
         final int CYCLES_PER_FRAME = 70224;
-        final long NANOSECONDS_PER_FRAME = 1_000_000_000L / 60;
+        final long NANOSECONDS_PER_FRAME = 16_666_667L; // 60 FPS exato
+        final double TARGET_FPS = 60.0;
         
         gameBoy.reset();
         gameBoy.setEmulatorSoundGloballyEnabled(globalSoundEnabled);
 
-        long lastTime = System.nanoTime();
-        long accumulatedTime = 0;
+        // Timing de alta precisão
+        long nextFrameTime = System.nanoTime();
         int actualFramesRendered = 0;
-        int loopIterations = 0;
         
+        // Métricas de performance
         long fpsTimer = System.currentTimeMillis();
+        long totalProcessingTime = 0; // Tempo de processamento puro (sem sleep)
+        long totalFrameTime = 0;      // Tempo total incluindo sleep
+        int frameTimeSamples = 0;
+        long minProcessingTime = Long.MAX_VALUE;
+        long maxProcessingTime = 0;
+        long minFrameTime = Long.MAX_VALUE;
+        long maxFrameTime = 0;
 
         while (running) {
-            loopIterations++;
-            long currentTime = System.nanoTime();
-            long frameTime = currentTime - lastTime;
-            lastTime = currentTime;
+            long frameStartTime = System.nanoTime();
             
-            if (frameTime > NANOSECONDS_PER_FRAME * 2) {
-                frameTime = NANOSECONDS_PER_FRAME;
-            }
-            
-            accumulatedTime += frameTime;
-
-            int framesProcessedThisIteration = 0;
-            while (accumulatedTime >= NANOSECONDS_PER_FRAME && !paused && framesProcessedThisIteration < 3) {
+            // Verifica se estamos no tempo certo para processar próximo frame
+            long currentTime = frameStartTime;
+            if (currentTime >= nextFrameTime && !paused) {
+                // Processa exatamente 1 frame
                 int cyclesThisFrame = 0;
                 while (cyclesThisFrame < CYCLES_PER_FRAME) {
                     int cycles = gameBoy.step();
@@ -456,46 +457,88 @@ public class GameBoyWindow extends JFrame {
 
                 if (!running) break;
                 
-                accumulatedTime -= NANOSECONDS_PER_FRAME;
-                framesProcessedThisIteration++;
-            }
-            
-            if (framesProcessedThisIteration >= 3) {
-                accumulatedTime = 0;
-            }
-
-            if (paused) {
-                accumulatedTime = 0;
-                lastTime = System.nanoTime();
+                // Renderiza apenas se frame está completo
+                if (gameBoy.getPpu().isFrameCompleted()) {
+                    screenPanel.updateScreen(gameBoy.getPpu().getScreenBuffer());
+                    actualFramesRendered++;
+                }
+                
+                // Agenda próximo frame (timing fixo)
+                nextFrameTime += NANOSECONDS_PER_FRAME;
+                
+                // Se estamos MUITO atrasados (>3 frames), resincroniza
+                if (System.nanoTime() - nextFrameTime > NANOSECONDS_PER_FRAME * 3) {
+                    nextFrameTime = System.nanoTime() + NANOSECONDS_PER_FRAME;
+                }
+            } else if (paused) {
+                // Se pausado, resincroniza timing
+                nextFrameTime = System.nanoTime() + NANOSECONDS_PER_FRAME;
             }
 
             if (!running) break;
-
-            if (gameBoy.getPpu().isFrameCompleted()) {
-                screenPanel.updateScreen(gameBoy.getPpu().getScreenBuffer());
-                actualFramesRendered++;
-            }
-
-            long nextFrameTime = lastTime + NANOSECONDS_PER_FRAME - accumulatedTime;
-            long sleepTime = nextFrameTime - System.nanoTime();
             
-            if (sleepTime > 1_000_000) {
+            // Tempo de processamento (CPU + PPU + render)
+            long processingTime = System.nanoTime() - frameStartTime;
+            totalProcessingTime += processingTime;
+            minProcessingTime = Math.min(minProcessingTime, processingTime);
+            maxProcessingTime = Math.max(maxProcessingTime, processingTime);
+
+            // Sleep preciso até o próximo frame
+            currentTime = System.nanoTime();
+            long sleepTime = nextFrameTime - currentTime;
+            
+            if (sleepTime > 2_000_000) { // Se > 2ms, vale a pena dormir
+                long sleepMs = sleepTime / 1_000_000;
+                int sleepNs = (int) (sleepTime % 1_000_000);
+                
                 try {
-                    long sleepMs = sleepTime / 1_000_000;
-                    int sleepNs = (int) (sleepTime % 1_000_000);
-                    Thread.sleep(sleepMs, sleepNs);
+                    // Acorda um pouco antes (1ms) para compensar imprecisão do sleep
+                    if (sleepMs > 1) {
+                        Thread.sleep(sleepMs - 1, sleepNs);
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     running = false;
                 }
-            } else if (sleepTime < -NANOSECONDS_PER_FRAME) {
-                accumulatedTime = 0;
+            }
+            
+            // Busy-wait final para precisão de nanosegundos
+            while (System.nanoTime() < nextFrameTime && running) {
+                Thread.onSpinWait();
             }
 
-            if (System.currentTimeMillis() - fpsTimer > 1000) {
-                System.out.println("FPS: " + actualFramesRendered + " | Loops/sec: " + loopIterations);
+            // Coleta métricas de frame time total
+            long actualFrameTime = System.nanoTime() - frameStartTime;
+            totalFrameTime += actualFrameTime;
+            frameTimeSamples++;
+            minFrameTime = Math.min(minFrameTime, actualFrameTime);
+            maxFrameTime = Math.max(maxFrameTime, actualFrameTime);
+
+            // Relatório de FPS e Frame Time a cada segundo
+            if (System.currentTimeMillis() - fpsTimer >= 1000) {
+                double avgProcessingTimeMs = (totalProcessingTime / (double) frameTimeSamples) / 1_000_000.0;
+                double minProcessingTimeMs = minProcessingTime / 1_000_000.0;
+                double maxProcessingTimeMs = maxProcessingTime / 1_000_000.0;
+                
+                double avgFrameTimeMs = (totalFrameTime / (double) frameTimeSamples) / 1_000_000.0;
+                double minFrameTimeMs = minFrameTime / 1_000_000.0;
+                double maxFrameTimeMs = maxFrameTime / 1_000_000.0;
+                
+                double cpuUsagePercent = (avgProcessingTimeMs / (1000.0 / TARGET_FPS)) * 100.0;
+                
+                System.out.printf("FPS: %d/%.0f | Processing: %.2fms (%.1f%% CPU, min: %.2f, max: %.2f) | Total: %.2fms (min: %.2f, max: %.2f)%n",
+                    actualFramesRendered, TARGET_FPS, 
+                    avgProcessingTimeMs, cpuUsagePercent, minProcessingTimeMs, maxProcessingTimeMs,
+                    avgFrameTimeMs, minFrameTimeMs, maxFrameTimeMs);
+                
                 actualFramesRendered = 0;
-                loopIterations = 0;
+                totalProcessingTime = 0;
+                totalFrameTime = 0;
+                frameTimeSamples = 0;
+                minProcessingTime = Long.MAX_VALUE;
+                maxProcessingTime = 0;
+                minFrameTime = Long.MAX_VALUE;
+                maxFrameTime = 0;
                 fpsTimer = System.currentTimeMillis();
             }
 
