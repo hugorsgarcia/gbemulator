@@ -25,6 +25,10 @@ public class GameBoyWindow extends JFrame {
     private GamepadInputHandler gamepadInputHandler;
 
     private boolean globalSoundEnabled = true;
+    
+    // Configurações de vídeo
+    private ScalingFilter currentScalingFilter = ScalingFilter.NEAREST_NEIGHBOR;
+    private ScreenEffect screenEffect = new ScreenEffect();
 
     public GameBoyWindow() {
         setTitle("GameBoy Emulator TCC");
@@ -87,6 +91,67 @@ public class GameBoyWindow extends JFrame {
         }
         menuBar.add(fileMenu);
         menuBar.add(windowMenu);
+        
+        // Menu "Vídeo"
+        JMenu videoMenu = new JMenu("Vídeo");
+        
+        // Submenu de Paletas
+        JMenu paletteMenu = new JMenu("Paleta de Cores");
+        ButtonGroup paletteGroup = new ButtonGroup();
+        
+        for (ColorPalette palette : ColorPalette.values()) {
+            JRadioButtonMenuItem paletteItem = new JRadioButtonMenuItem(palette.getDisplayName());
+            paletteItem.setSelected(palette == ColorPalette.DMG_GREEN);
+            paletteItem.addActionListener(e -> setPalette(palette));
+            paletteGroup.add(paletteItem);
+            paletteMenu.add(paletteItem);
+        }
+        videoMenu.add(paletteMenu);
+        
+        videoMenu.addSeparator();
+        
+        // Submenu de Filtros de Escalonamento
+        JMenu scalingMenu = new JMenu("Filtro de Escalonamento");
+        ButtonGroup scalingGroup = new ButtonGroup();
+        
+        for (ScalingFilter filter : ScalingFilter.values()) {
+            JRadioButtonMenuItem filterItem = new JRadioButtonMenuItem(filter.getDisplayName());
+            filterItem.setSelected(filter == ScalingFilter.NEAREST_NEIGHBOR);
+            filterItem.addActionListener(e -> setScalingFilter(filter));
+            scalingGroup.add(filterItem);
+            scalingMenu.add(filterItem);
+        }
+        videoMenu.add(scalingMenu);
+        
+        videoMenu.addSeparator();
+        
+        // Submenu de Efeitos de Tela
+        JMenu effectsMenu = new JMenu("Efeitos de Tela");
+        
+        JCheckBoxMenuItem ghostingItem = new JCheckBoxMenuItem("LCD Ghosting", false);
+        ghostingItem.addActionListener(e -> {
+            screenEffect.setGhostingEnabled(ghostingItem.isSelected());
+            System.out.println("LCD Ghosting: " + (ghostingItem.isSelected() ? "Habilitado" : "Desabilitado"));
+        });
+        effectsMenu.add(ghostingItem);
+        
+        JCheckBoxMenuItem gridItem = new JCheckBoxMenuItem("Grid Lines", false);
+        gridItem.addActionListener(e -> {
+            screenEffect.setGridEnabled(gridItem.isSelected());
+            System.out.println("Grid Lines: " + (gridItem.isSelected() ? "Habilitado" : "Desabilitado"));
+        });
+        effectsMenu.add(gridItem);
+        
+        JCheckBoxMenuItem scanlinesItem = new JCheckBoxMenuItem("Scanlines", false);
+        scanlinesItem.addActionListener(e -> {
+            screenEffect.setScanlinesEnabled(scanlinesItem.isSelected());
+            System.out.println("Scanlines: " + (scanlinesItem.isSelected() ? "Habilitado" : "Desabilitado"));
+        });
+        effectsMenu.add(scanlinesItem);
+        
+        videoMenu.add(effectsMenu);
+        
+        menuBar.add(videoMenu);
 
         JMenu controlMenu = new JMenu("Controle");
         JMenuItem showControlsItem = new JMenuItem("Exibir Controles do Teclado");
@@ -158,6 +223,7 @@ public class GameBoyWindow extends JFrame {
         
         addMenuPauseListeners(fileMenu);
         addMenuPauseListeners(windowMenu);
+        addMenuPauseListeners(videoMenu);
         addMenuPauseListeners(controlMenu);
         addMenuPauseListeners(soundMenu);
         addMenuPauseListeners(linkMenu);
@@ -764,6 +830,25 @@ public class GameBoyWindow extends JFrame {
             "Dispositivo desconectado.",
             "Link Cable", JOptionPane.INFORMATION_MESSAGE);
     }
+    
+    // ==================== Configurações de Vídeo ====================
+    
+    /**
+     * Define a paleta de cores
+     */
+    private void setPalette(ColorPalette palette) {
+        gameBoy.getPpu().setColorPalette(palette);
+        screenPanel.repaint();
+    }
+    
+    /**
+     * Define o filtro de escalonamento
+     */
+    private void setScalingFilter(ScalingFilter filter) {
+        currentScalingFilter = filter;
+        screenPanel.repaint();
+        System.out.println("Filtro de escalonamento: " + filter.getDisplayName());
+    }
 
     private class GameBoyScreenPanel extends JPanel {
         private BufferedImage screenBuffer;
@@ -795,9 +880,18 @@ public class GameBoyWindow extends JFrame {
             
             Graphics2D g2d = (Graphics2D) g;
             
-            g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
-            g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
+            // Aplica o filtro de escalonamento selecionado
+            g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, 
+                currentScalingFilter.getRenderingHintValue());
+            
+            // Desabilita antialiasing para manter pixels nítidos com Nearest Neighbor
+            if (currentScalingFilter == ScalingFilter.NEAREST_NEIGHBOR) {
+                g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+                g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
+            } else {
+                g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            }
             
             int panelWidth = getWidth();
             int panelHeight = getHeight();
@@ -819,7 +913,25 @@ public class GameBoyWindow extends JFrame {
             int x = (panelWidth - scaledWidth) / 2;
             int y = (panelHeight - scaledHeight) / 2;
             
-            g2d.drawImage(screenBuffer, x, y, scaledWidth, scaledHeight, null);
+            // Aplica ghosting se habilitado
+            BufferedImage frameToRender = screenBuffer;
+            if (screenEffect.isGhostingEnabled()) {
+                frameToRender = screenEffect.applyEffects(screenBuffer, scaledWidth, scaledHeight);
+            }
+            
+            // Desenha a imagem principal
+            g2d.drawImage(frameToRender, x, y, scaledWidth, scaledHeight, null);
+            
+            // Aplica scanlines se habilitado
+            if (screenEffect.isScanlinesEnabled()) {
+                screenEffect.drawScanlines(g2d, x, y, scaledWidth, scaledHeight);
+            }
+            
+            // Aplica grid lines se habilitado
+            if (screenEffect.isGridEnabled()) {
+                screenEffect.drawGridLines(g2d, x, y, scaledWidth, scaledHeight, 
+                    SCREEN_WIDTH, SCREEN_HEIGHT);
+            }
         }
     }
 }

@@ -53,12 +53,11 @@ public class PPU {
     private final int[] screenBuffer = new int[SCREEN_WIDTH * SCREEN_HEIGHT];
     private boolean frameCompleted = false;
 
-    private final int[] COLORS = {
-            0xFFE0F8D0, 
-            0xFF88C070, 
-            0xFF346856, 
-            0xFF081820  
-    };
+    private ColorPalette currentPalette = ColorPalette.DMG_GREEN;
+    
+    private int[] getColors() {
+        return currentPalette.getColors();
+    }
 
     private int lcdc;  
     private int stat;  
@@ -99,7 +98,7 @@ public class PPU {
     public void reset() {
         Arrays.fill(vram, (byte) 0);
         Arrays.fill(oam, (byte) 0);
-        Arrays.fill(screenBuffer, COLORS[0]); // Tela branca
+        Arrays.fill(screenBuffer, getColors()[0]); // Tela branca
         frameCompleted = false;
 
         lcdc = 0x91; 
@@ -832,7 +831,24 @@ public class PPU {
         int shift = colorIndex * 2;
         int paletteColorIndex = (paletteRegister >> shift) & 0x03;
         
-        return COLORS[paletteColorIndex];
+        return getColors()[paletteColorIndex];
+    }
+    
+    /**
+     * Define a paleta de cores atual
+     */
+    public void setColorPalette(ColorPalette palette) {
+        if (palette != null) {
+            this.currentPalette = palette;
+            System.out.println("Paleta alterada para: " + palette.getDisplayName());
+        }
+    }
+    
+    /**
+     * Retorna a paleta de cores atual
+     */
+    public ColorPalette getColorPalette() {
+        return currentPalette;
     }
 
     public boolean isLcdEnabled() { return (lcdc & 0x80) != 0; } 
@@ -860,7 +876,7 @@ public class PPU {
             lycComparisonThisCycle = false;
             updateStatRegister();
             
-            Arrays.fill(screenBuffer, COLORS[0]);
+            Arrays.fill(screenBuffer, getColors()[0]);
             frameCompleted = true;
         } else if (!wasLcdEnabled && isLcdEnabled) {
             ly = 0;

@@ -32,9 +32,14 @@ jar {
             'Main-Class': 'com.meutcc.gbemulator.Main'
         )
     }
+    
+    // Incluir todas as classes das dependências
     from {
         configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
     }
+    
+    // As DLLs em src/main/resources/native serão automaticamente incluídas
+    
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
