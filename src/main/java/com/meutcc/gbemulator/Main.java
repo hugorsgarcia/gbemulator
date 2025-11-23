@@ -4,7 +4,6 @@ import javax.swing.*;
 
 public class Main {
     public static void main(String[] args) {
-        // Carregar DLLs do JInput embutidas no JAR
         try {
             NativeLibraryLoader.loadJInputLibraries();
         } catch (Exception e) {
@@ -13,7 +12,7 @@ public class Main {
             System.err.println("Detalhes: " + e.getMessage());
             e.printStackTrace();
         }
-        
+
         SwingUtilities.invokeLater(() -> {
             GameBoyWindow window = new GameBoyWindow();
             window.setVisible(true);

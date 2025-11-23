@@ -35,18 +35,18 @@ public class GamepadManager {
     }
     
     private void initializeDefaultMapping() {
-        buttonMapping.put("button_0", MMU.Button.GAMEBOY_B);        // B (Switch) / A (Xbox) / Cross (PS)
-        buttonMapping.put("button_1", MMU.Button.GAMEBOY_A);        // A (Switch) / B (Xbox) / Circle (PS)
-        buttonMapping.put("button_2", MMU.Button.GAMEBOY_B);        // Y (Switch) / Y (Xbox) / Square (PS)
-        buttonMapping.put("button_3", MMU.Button.GAMEBOY_A);        // X (Switch) / X (Xbox) / Triangle (PS)
+        buttonMapping.put("button_0", MMU.Button.GAMEBOY_B);        
+        buttonMapping.put("button_1", MMU.Button.GAMEBOY_A);        
+        buttonMapping.put("button_2", MMU.Button.GAMEBOY_B);       
+        buttonMapping.put("button_3", MMU.Button.GAMEBOY_A);       
         
-        buttonMapping.put("button_6", MMU.Button.GAMEBOY_SELECT);   // Select/Back/Minus
-        buttonMapping.put("button_7", MMU.Button.GAMEBOY_START);    // Start/Plus
-        buttonMapping.put("button_8", MMU.Button.GAMEBOY_SELECT);   // Select alternativo
-        buttonMapping.put("button_9", MMU.Button.GAMEBOY_START);    // Start alternativo
+        buttonMapping.put("button_6", MMU.Button.GAMEBOY_SELECT);  
+        buttonMapping.put("button_7", MMU.Button.GAMEBOY_START);   
+        buttonMapping.put("button_8", MMU.Button.GAMEBOY_SELECT);  
+        buttonMapping.put("button_9", MMU.Button.GAMEBOY_START);   
         
-        buttonMapping.put("button_4", MMU.Button.GAMEBOY_SELECT);   // L/LB
-        buttonMapping.put("button_5", MMU.Button.GAMEBOY_START);    // R/RB
+        buttonMapping.put("button_4", MMU.Button.GAMEBOY_SELECT);  
+        buttonMapping.put("button_5", MMU.Button.GAMEBOY_START);  
         
         buttonMapping.put("x_positive", MMU.Button.GAMEBOY_RIGHT);
         buttonMapping.put("x_negative", MMU.Button.GAMEBOY_LEFT);
@@ -69,10 +69,6 @@ public class GamepadManager {
         axisThresholds.put("rz", DEFAULT_AXIS_THRESHOLD);
     }
     
-    /**
-     * Detecta gamepads conectados ao sistema
-     * @return Lista de gamepads encontrados
-     */
     public List<Controller> detectGamepads() {
         List<Controller> gamepads = new ArrayList<>();
         
@@ -91,8 +87,6 @@ public class GamepadManager {
                 System.out.println("  Tipo: " + type);
                 System.out.println("  Componentes: " + controller.getComponents().length);
                 
-                // Detecta gamepads, joysticks e controles genéricos
-                // Inclui verificação por nome para Switch Pro Controller
                 boolean isGamepad = type == Controller.Type.GAMEPAD || 
                                    type == Controller.Type.STICK ||
                                    name.toLowerCase().contains("pro controller") ||
@@ -139,10 +133,6 @@ public class GamepadManager {
         return gamepads;
     }
     
-    /**
-     * Inicia a leitura contínua do gamepad
-     * @param listener Callback para eventos de input
-     */
     public void startPolling(GamepadInputListener listener) {
         if (activeGamepad == null) {
             System.err.println("Nenhum gamepad ativo. Execute detectGamepads() primeiro.");
@@ -161,7 +151,6 @@ public class GamepadManager {
             
             while (running) {
                 try {
-                    // Tenta fazer poll do gamepad
                     boolean pollSuccess = activeGamepad.poll();
                     
                     if (!pollSuccess) {
@@ -177,14 +166,12 @@ public class GamepadManager {
                             System.err.println("  3. Atualizar os drivers do controle no Windows");
                         }
                         
-                        // Aguarda mais tempo antes de tentar novamente
                         try {
                             Thread.sleep(failCount < 5 ? 100 : 1000);
                         } catch (InterruptedException e) {
                             break;
                         }
                         
-                        // Se falhou muitas vezes, tenta re-detectar
                         if (failCount >= maxConsecutiveFails) {
                             System.out.println("Tentando re-detectar gamepads...");
                             List<Controller> gamepads = detectGamepads();
@@ -198,13 +185,11 @@ public class GamepadManager {
                         continue;
                     }
                     
-                    // Poll bem-sucedido - reseta contador de falhas
                     if (failCount > 0) {
                         System.out.println("Conexão com gamepad restabelecida!");
                         failCount = 0;
                     }
                     
-                    // Processa o input do gamepad
                     processGamepadInput();
                     
                 } catch (Exception e) {
@@ -213,7 +198,7 @@ public class GamepadManager {
                 }
                 
                 try {
-                    Thread.sleep(16); // ~60 Hz polling rate
+                    Thread.sleep(16);
                 } catch (InterruptedException e) {
                     break;
                 }
@@ -227,9 +212,6 @@ public class GamepadManager {
         pollThread.start();
     }
     
-    /**
-     * Processa o input do gamepad e dispara callbacks
-     */
     private void processGamepadInput() {
         if (inputListener == null || activeGamepad == null) {
             return;
@@ -244,25 +226,19 @@ public class GamepadManager {
             String componentId = component.getIdentifier().getName();
             
             if (component.isAnalog()) {
-                // Processa eixos analógicos (direcionais)
                 processAxisInput(componentId, value);
             } else {
-                // Processa botões digitais
                 processButtonInput(componentId, value);
             }
         }
     }
     
-    /**
-     * Processa input de eixos analógicos
-     */
     private void processAxisInput(String axisId, float value) {
         Float lastValue = lastAxisValues.getOrDefault(axisId, 0.0f);
         lastAxisValues.put(axisId, value);
         
         float threshold = axisThresholds.getOrDefault(axisId, DEFAULT_AXIS_THRESHOLD);
         
-        // Verifica se o eixo ultrapassou o threshold na direção positiva
         MMU.Button positiveButton = null;
         for (String key : new String[]{axisId + "_positive", axisId.replace("axis_", "") + "_positive"}) {
             positiveButton = buttonMapping.get(key);
@@ -277,7 +253,6 @@ public class GamepadManager {
             }
         }
         
-        // Verifica se o eixo ultrapassou o threshold na direção negativa
         MMU.Button negativeButton = null;
         for (String key : new String[]{axisId + "_negative", axisId.replace("axis_", "") + "_negative"}) {
             negativeButton = buttonMapping.get(key);
@@ -293,9 +268,6 @@ public class GamepadManager {
         }
     }
     
-    /**
-     * Processa input de botões digitais
-     */
     private void processButtonInput(String buttonId, float value) {
         String buttonKey = buttonId.toLowerCase();
         MMU.Button gameBoyButton = buttonMapping.get(buttonKey);
@@ -308,10 +280,7 @@ public class GamepadManager {
             }
         }
     }
-    
-    /**
-     * Para a leitura do gamepad
-     */
+
     public void stopPolling() {
         running = false;
         
@@ -323,10 +292,7 @@ public class GamepadManager {
             }
         }
     }
-    
-    /**
-     * Define qual gamepad usar
-     */
+
     public void setActiveGamepad(Controller gamepad) {
         boolean wasRunning = running;
         
@@ -342,58 +308,34 @@ public class GamepadManager {
         }
     }
     
-    /**
-     * Obtém o gamepad ativo atual
-     */
     public Controller getActiveGamepad() {
         return activeGamepad;
     }
-    
-    /**
-     * Verifica se há um gamepad ativo
-     */
+
     public boolean hasActiveGamepad() {
         return activeGamepad != null;
     }
     
-    /**
-     * Define o mapeamento customizado de um botão/eixo (substitui se já existir)
-     */
     public void setButtonMapping(String componentId, MMU.Button button) {
         buttonMapping.put(componentId.toLowerCase(), button);
     }
     
-    /**
-     * Adiciona um mapeamento sem remover os existentes para o mesmo botão
-     */
     public void addButtonMapping(String componentId, MMU.Button button) {
         buttonMapping.put(componentId.toLowerCase(), button);
     }
     
-    /**
-     * Remove todos os mapeamentos para um botão específico do Game Boy
-     */
     public void removeButtonMappings(MMU.Button button) {
         buttonMapping.entrySet().removeIf(entry -> entry.getValue() == button);
     }
-    
-    /**
-     * Obtém o mapeamento atual de botões
-     */
+
     public Map<String, MMU.Button> getButtonMapping() {
         return new HashMap<>(buttonMapping);
     }
     
-    /**
-     * Define o threshold para um eixo analógico
-     */
     public void setAxisThreshold(String axisId, float threshold) {
         axisThresholds.put(axisId, threshold);
     }
     
-    /**
-     * Obtém todos os componentes do gamepad ativo
-     */
     public Component[] getGamepadComponents() {
         if (activeGamepad == null) {
             return new Component[0];
@@ -401,9 +343,6 @@ public class GamepadManager {
         return activeGamepad.getComponents();
     }
     
-    /**
-     * Testa um componente específico do gamepad
-     */
     public float pollComponent(Component component) {
         if (activeGamepad != null && activeGamepad.poll()) {
             return component.getPollData();
@@ -411,24 +350,15 @@ public class GamepadManager {
         return 0.0f;
     }
     
-    /**
-     * Limpa o mapeamento atual
-     */
     public void clearMapping() {
         buttonMapping.clear();
     }
     
-    /**
-     * Restaura o mapeamento padrão
-     */
     public void resetToDefaultMapping() {
         clearMapping();
         initializeDefaultMapping();
     }
     
-    /**
-     * Libera recursos
-     */
     public void shutdown() {
         stopPolling();
         activeGamepad = null;

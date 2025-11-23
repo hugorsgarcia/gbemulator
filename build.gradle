@@ -43,6 +43,62 @@ jar {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
+// Tarefa para criar instalador Windows usando jpackage diretamente
+task jpackageInstaller(type: Exec) {
+    group = 'distribution'
+    description = 'Cria um instalador Windows (.exe) usando jpackage'
+    
+    dependsOn  jar
+    
+    doFirst {
+        def javaHome = System.getProperty('java.home')
+        def jpackageExe = "${javaHome}/bin/jpackage${org.gradle.internal.os.OperatingSystem.current().isWindows() ? '.exe' : ''}"
+        
+        // Verificar se jpackage existe
+        if (!file(jpackageExe).exists()) {
+            throw new GradleException("jpackage not found at: ${jpackageExe}. Please use JDK 14 or later.")
+        }
+        
+        // Criar diretório de saída
+        def outputDir = file("${buildDir}/installer")
+        outputDir.mkdirs()
+        
+        // Preparar comando jpackage
+        def jarFile = jar.archiveFile.get().asFile
+        def appVersion = project.version.toString()
+        def appName = 'GameBoyEmulator'
+        
+        commandLine = [
+            jpackageExe,
+            '--type', 'exe',
+            '--input', jarFile.parent,
+            '--dest', outputDir.absolutePath,
+            '--name', appName,
+            '--main-jar', jarFile.name,
+            '--main-class', 'com.meutcc.gbemulator.Main',
+            '--app-version', appVersion,
+            '--vendor', 'meutcc',
+            '--description', 'Game Boy Emulator',
+            // '--icon', 'src/main/resources/icon.ico', // Descomentar quando tiver ícone
+            '--win-per-user-install',
+            '--win-dir-chooser',
+            '--win-menu',
+            '--win-shortcut',
+            '--win-menu-group', 'Game Boy Emulator'
+        ]
+        
+        println "Creating installer at: ${outputDir.absolutePath}"
+        println "Using JAR: ${jarFile.absolutePath}"
+    }
+}
+
+// Alias para compatibilidade
+task jpackage {
+    group = 'distribution'
+    description = 'Alias for jpackageInstaller'
+    dependsOn jpackageInstaller
+}
+
 // Tarefas personalizadas
 task runEmulator(type: JavaExec) {
     group = 'application'
