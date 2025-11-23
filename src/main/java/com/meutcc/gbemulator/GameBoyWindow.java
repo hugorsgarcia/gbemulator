@@ -84,7 +84,9 @@ public class GameBoyWindow extends JFrame {
         canvas.setPreferredSize(new Dimension(SCREEN_WIDTH * currentWindowScale, SCREEN_HEIGHT * currentWindowScale));
         canvas.setMinimumSize(new Dimension(SCREEN_WIDTH * MIN_SCALE, SCREEN_HEIGHT * MIN_SCALE));
         canvas.setBackground(Color.BLACK);
-        canvas.setIgnoreRepaint(true); 
+        canvas.setIgnoreRepaint(true);
+        canvas.addKeyListener(inputHandler);
+        canvas.setFocusable(true);
         add(canvas, BorderLayout.CENTER);
 
         screenBuffer = new BufferedImage(SCREEN_WIDTH, SCREEN_HEIGHT, BufferedImage.TYPE_INT_RGB);
@@ -97,13 +99,13 @@ public class GameBoyWindow extends JFrame {
             ColorPalette palette = ColorPalette.valueOf(configManager.getConfig().getColorPalette());
             gameBoy.getPpu().setColorPalette(palette);
         } catch (IllegalArgumentException e) {
-            
+
         }
 
         try {
             currentScalingFilter = ScalingFilter.valueOf(configManager.getConfig().getScalingFilter());
         } catch (IllegalArgumentException e) {
-            
+
         }
 
         JMenuBar menuBar = new JMenuBar();
@@ -284,6 +286,7 @@ public class GameBoyWindow extends JFrame {
         setFocusable(true);
         pack();
         setLocationRelativeTo(null);
+        canvas.requestFocusInWindow();
 
         canvas.createBufferStrategy(2);
         bufferStrategy = canvas.getBufferStrategy();
@@ -545,7 +548,7 @@ public class GameBoyWindow extends JFrame {
             currentTime = System.nanoTime();
             long sleepTime = nextFrameTime - currentTime;
 
-            if (sleepTime > 2_000_000) { 
+            if (sleepTime > 2_000_000) {
                 long sleepMs = sleepTime / 1_000_000;
                 int sleepNs = (int) (sleepTime % 1_000_000);
 
@@ -597,8 +600,9 @@ public class GameBoyWindow extends JFrame {
                 fpsTimer = System.currentTimeMillis();
             }
 
-            if (!this.hasFocus() && this.isFocusOwner()) {
-                this.requestFocusInWindow();
+            // Garantir que o canvas mantenha o foco para capturar eventos de teclado
+            if (!canvas.hasFocus() && canvas.isFocusable()) {
+                canvas.requestFocusInWindow();
             }
         }
         System.out.println("Emulation loop stopped.");

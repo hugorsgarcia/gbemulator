@@ -53,8 +53,9 @@ bin/
 *.swp
 *~.nib
 
-# Package Files
+# Package Files (note: gradle-wrapper.jar is explicitly allowed above)
 *.jar
+!gradle/wrapper/*.jar
 *.war
 *.nar
 *.ear
@@ -64,3 +65,21 @@ bin/
 
 # Virtual machine crash logs
 hs_err_pid*
+
+# User configuration files
+config.properties
+*.sav
+
+# Emulator-specific files
+# Game Boy ROMs (add test ROMs to a separate test-roms/ folder if needed)
+*.gb
+*.gbc
+
+# Battery-backed RAM saves (cartridge save data)
+*.ram
+
+# Game Boy Printer output
+printer_output/
+
+# JInput native libraries temporary extraction
+jinput-natives-*/
