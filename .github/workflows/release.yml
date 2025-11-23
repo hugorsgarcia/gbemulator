@@ -1,0 +1,97 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Installer
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+      
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+        shell: bash
+      
+      - name: Build with Gradle
+        run: ./gradlew build
+      
+      - name: Create Windows installer
+        run: ./gradlew jpackageInstaller
+      
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        shell: bash
+      
+      - name: Rename installer
+        run: |
+          $installer = Get-ChildItem -Path build/installer -Filter *.exe | Select-Object -First 1
+          $newName = "GameBoyEmulator-${{ steps.get_version.outputs.VERSION }}.exe"
+          Rename-Item -Path $installer.FullName -NewName $newName
+        shell: pwsh
+      
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: build/installer/*.exe
+          retention-days: 5
+  
+  create-release:
+    name: Create GitHub Release
+    needs: build-windows
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+      
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ steps.get_version.outputs.VERSION }}
+          body: |
+            ## Game Boy Emulator v${{ steps.get_version.outputs.VERSION }}
+            
+            ### Download
+            - **Windows Installer**: `GameBoyEmulator-${{ steps.get_version.outputs.VERSION }}.exe`
+            
+            ### Requirements
+            - Windows 10 or later
+            - Java Runtime Environment is included in the installer
+            
+            ### Installation
+            1. Download the installer
+            2. Run the `.exe` file
+            3. Follow the installation wizard
+            4. Launch from Start Menu or Desktop shortcut
+            
+            ### Changes
+            See commit history for detailed changes.
+          files: '*.exe'
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

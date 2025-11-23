@@ -12,6 +12,7 @@
 *Ciência da Computação*
 
 [Demonstração](#-demonstração) •
+[Download](#-download) •
 [Instalação](#-instalação) •
 [Documentação](#-documentação) •
 [Licença](#-licença)
@@ -28,6 +29,7 @@
 - [Novidades da Versão 2.0](#-novidades-da-versão-20)
 - [Arquitetura](#-arquitetura)
 - [Tecnologias Utilizadas](#-tecnologias-utilizadas)
+- [Download](#-download)
 - [Instalação](#-instalação)
 - [Como Usar](#-como-usar)
 - [Controles](#-controles)
@@ -272,12 +274,30 @@ Desenvolver um emulador funcional do Game Boy capaz de executar ROMs comerciais 
 
 ---
 
-## 📦 Instalação
+## 📥 Download
 
-### Pré-requisitos
-- **Java JDK 21** ou superior
-- **Gradle 8.x** (opcional, wrapper incluído)
-- **Git** para clonar o repositório
+### Instalador Windows
+
+Baixe a versão mais recente do instalador Windows diretamente:
+
+➡️ **[Download GameBoyEmulator-{version}.exe](https://github.com/hugorsgarcia/gbemulator/releases/latest)**
+
+**Requisitos:**
+- Windows 10 ou superior
+- O instalador já inclui o Java Runtime Environment
+
+**Instalação:**
+1. Baixe o arquivo `.exe` da página de releases
+2. Execute o instalador
+3. Siga o assistente de instalação
+4. Inicie pelo Menu Iniciar ou atalho na área de trabalho
+
+### Compilar do Código-Fonte
+
+Se preferir compilar o projeto você mesmo, siga as instruções abaixo.
+
+---
+
 
 ### Passo a Passo
 
@@ -434,9 +454,9 @@ Desenvolvedor Full Stack | Entusiasta de Emulação | Cientista da computação
 Este projeto não seria possível sem:
 
 - **Prof. [Nome do Orientador]** - Orientação e suporte acadêmico
-- **Comunidade GBDev** - Documentação técnica excepcional
-- **Pan Docs** - Referência definitiva do hardware Game Boy
-- **Blargg & Gekkio** - Test ROMs essenciais
+- **Comunidade GBDev** - Documentação técnica
+- **Pan Docs** - Referência do hardware Game Boy
+- **Blargg & Gekkio** - Testes de ROMs
 - **Imran Nazar** - Tutorial "GameBoy Emulation in JavaScript"
 - **Família e Amigos** - Apoio incondicional
 
