@@ -44,7 +44,7 @@ public class GameBoyWindow extends JFrame {
     private BufferedImage screenBuffer;
 
     public GameBoyWindow() {
-        setTitle("GameBoy Emulator TCC");
+        setTitle("Emulador de Game Boy");
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         setResizable(true);
 
@@ -240,7 +240,7 @@ public class GameBoyWindow extends JFrame {
         soundMenu.add(toggleSoundItem);
         menuBar.add(soundMenu);
 
-        JMenu linkMenu = new JMenu("Link Cable");
+        JMenu linkMenu = new JMenu("Link Cable (Beta)");
 
         JMenu multiplayerMenu = new JMenu("Multiplayer");
         JMenuItem hostGameItem = new JMenuItem("Host Game (Servidor)...");
