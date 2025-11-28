@@ -1,12 +1,13 @@
 <div align="center">
 
-# 🎮 Game Boy Emulator
-### Emulador de Game Boy DMG em Java
 
-[![Java Version](https://img.shields.io/badge/Java-21-orange.svg)](https://www.oracle.com/java/)
+### 🎮 Emulador de Game Boy em Java
+
+[![Java Version](https://img.shields.io/badge/Java-25-orange.svg)](https://www.oracle.com/java/)
 [![License](https://img.shields.io/badge/license-Academic-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.0-green.svg)](https://github.com/hugorsgarcia/gbemulator)
+[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/hugorsgarcia/gbemulator)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/hugorsgarcia/gbemulator)
+[![Gradle](https://img.shields.io/badge/Gradle-9.2.1-02303A.svg)](https://gradle.org/)
 
 **Trabalho de Conclusão de Curso**  
 *Ciência da Computação*
@@ -14,7 +15,7 @@
 [Demonstração](#-demonstração) •
 [Download](#-download) •
 [Instalação](#-instalação) •
-[Documentação](#-documentação) •
+[Documentação](#-documentação-técnica) •
 [Licença](#-licença)
 
 </div>
@@ -26,7 +27,6 @@
 - [Sobre o Projeto](#-sobre-o-projeto)
 - [Objetivos](#-objetivos)
 - [Funcionalidades](#-funcionalidades)
-- [Novidades da Versão 2.0](#-novidades-da-versão-20)
 - [Arquitetura](#-arquitetura)
 - [Tecnologias Utilizadas](#-tecnologias-utilizadas)
 - [Download](#-download)
@@ -35,7 +35,6 @@
 - [Controles](#-controles)
 - [Documentação Técnica](#-documentação-técnica)
 - [Resultados e Testes](#-resultados-e-testes)
-- [Trabalhos Futuros](#-trabalhos-futuros)
 - [Autor](#-autor)
 - [Agradecimentos](#-agradecimentos)
 - [Licença](#-licença)
@@ -68,10 +67,10 @@ Desenvolver um emulador funcional do Game Boy capaz de executar ROMs comerciais 
 - ✅ Simular a PPU (Picture Processing Unit) com precisão ciclo-a-ciclo
 - ✅ Desenvolver a APU (Audio Processing Unit) com os 4 canais de áudio
 - ✅ Criar sistema de gerenciamento de memória (MMU) com suporte a MBCs
-- ✅ Implementar interface gráfica responsiva com Java Swing
+- ✅ Implementar interface gráfica com Java Swing
 - ✅ Adicionar suporte a controles via teclado e gamepad
 - ✅ Alcançar compatibilidade com principais test ROMs da comunidade
-- ✅ Implementar recursos avançados (Link Cable, Câmera, Impressora)
+- ✅ Implementar recursos avançados (Link Cable, Gameboy Câmera, GameBoy Printer)
 
 ---
 
@@ -101,95 +100,19 @@ Desenvolver um emulador funcional do Game Boy capaz de executar ROMs comerciais 
 
 ---
 
-## 🚀 Novidades da Versão 2.0
-
-### 🎯 Precisão Melhorada da PPU
-
-#### 1. **Timing Ciclo-a-Ciclo**
-- Modo 2 (OAM Scan): 80 ciclos fixos
-- Modo 3 (Drawing): 172-289 ciclos variáveis baseado em:
-  - Número de sprites visíveis (+11 ciclos por sprite)
-  - Scroll horizontal SCX (+0 a 7 ciclos)
-  - Window ativa (+6 ciclos)
-- Modo 0 (H-Blank): resto até 456 ciclos
-- Modo 1 (V-Blank): 4560 ciclos (10 linhas)
-
-#### 2. **Precisão de STAT e LYC**
-- **Interrupções STAT no ciclo exato**:
-  - Modo 0, 1, 2 disparam no momento da transição
-  - LYC=LY comparado no ciclo 4 do modo 2
-  - Edge detection (0→1) previne interrupções duplicadas
-  
-- **STAT Write Bug**:
-  - Emula glitch do hardware DMG real
-  - Escrever no STAT pode disparar interrupção espúria
-  - Importante para compatibilidade com certos jogos
-  
-- **Bug da Linha 153→0**:
-  - LY=153 dura apenas 4 T-cycles (não 456)
-  - Comparação LYC=LY especial no ciclo 4
-  - Comportamento idêntico ao hardware real
-
-#### 3. **Pipeline Pixel-a-Pixel (Pixel FIFO)**
-- Sistema opcional de renderização pixel por pixel
-- Suporta efeitos mid-scanline:
-  - Mudanças de paleta durante scanline
-  - Alterações de scroll (SCX/SCY)
-  - Ativação/desativação da window
-- Habilitável via `ppu.setPixelFifoEnabled(true)`
-
-#### 4. **Restrições de Acesso VRAM/OAM**
-- **VRAM**: inacessível durante Modo 3 (Drawing)
-- **OAM**: inacessível durante Modo 2 (OAM Scan) e Modo 3 (Drawing)
-- Leituras bloqueadas retornam `0xFF` (comportamento do hardware real)
-- Escritas bloqueadas são ignoradas
-
-#### 5. **Precisão de Sprites**
-- Limite correto de 10 sprites por linha
-- Seleção baseada em ordem da OAM (primeiros 10 encontrados)
-- Prioridade sprite vs sprite:
-  - Menor X = maior prioridade visual
-  - X igual: menor índice OAM tem prioridade
-- Prioridade BG/Window vs Sprite:
-  - Cor 0 do sprite sempre transparente
-  - Bit 7 do sprite controla prioridade com BG
-  - Respeita LCDC.0 (BG Display Enable)
-
-### 📊 Modos de Renderização
-
-**Modo Tradicional (Padrão - Recomendado)**
-- Renderização por scanline completa
-- Melhor performance
-- Compatível com 95%+ dos jogos
-
-**Modo Pixel FIFO (Opcional)**
-- Renderização pixel a pixel
-- Efeitos mid-scanline
-- Máxima precisão
-- Use apenas se necessário
-
-### 📚 Documentação Adicional
-- [STAT_LYC_TIMING.md](STAT_LYC_TIMING.md) - Documentação detalhada do timing STAT/LYC
-- Compatível com test ROMs:
-  - blargg's instr_timing
-  - mooneye-gb acceptance tests
-  - dmg-acid2
-
----
-
 ## 🏗️ Arquitetura
 
 ### Visão Geral do Sistema
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                       GameBoy Core                           │
+│                       GameBoy Core                          │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌─────────┐    ┌─────────┐    ┌─────────┐   ┌──────────┐ │
-│  │   CPU   │◄───┤   MMU   ├───►│   PPU   │   │   APU    │ │
-│  │ LR35902 │    │ Memory  │    │ Video   │   │  Audio   │ │
-│  └─────────┘    │  Bus    │    └─────────┘   └──────────┘ │
+│                                                             │
+│  ┌─────────┐    ┌─────────┐    ┌─────────┐   ┌──────────┐   │
+│  │   CPU   │◄───┤   MMU   ├───►│   PPU   │   │   APU    │   │
+│  │ LR35902 │    │ Memory  │    │ Video   │   │  Audio   │   │
+│  └─────────┘    │  Bus    │    └─────────┘   └──────────┘   │
 │       ▲         └────┬────┘         │              │        │
 │       │              │              │              │        │
 │       │         ┌────▼────┐         │              │        │
@@ -197,18 +120,18 @@ Desenvolver um emulador funcional do Game Boy capaz de executar ROMs comerciais 
 │       │         │   MBC   │         │              │        │
 │       │         └─────────┘         │              │        │
 │       │                             │              │        │
-│  ┌────▼─────────────────────────────▼──────────────▼────┐  │
-│  │              Serial / Input / Timer                   │  │
-│  └────────────────────────────────────────────────────┬──┘  │
-└────────────────────────────────────────────────────────┼─────┘
+│  ┌────▼─────────────────────────────▼──────────────▼────┐   │
+│  │              Serial / Input / Timer                  │   │
+│  └────────────────────────────────────────────────────┬─┘   │
+└────────────────────────────────────────────────────────┼────┘
                                                          │
                     ┌────────────────────────────────────▼─────┐
-                    │         GameBoyWindow (Swing GUI)         │
-                    │  ┌─────────┐  ┌─────────┐  ┌──────────┐ │
-                    │  │ Display │  │  Input  │  │  Audio   │ │
-                    │  │ 160x144 │  │ Handler │  │  Output  │ │
-                    │  └─────────┘  └─────────┘  └──────────┘ │
-                    └───────────────────────────────────────────┘
+                    │         GameBoyWindow (Swing GUI)        │
+                    │  ┌─────────┐  ┌─────────┐  ┌──────────┐  │
+                    │  │ Display │  │  Input  │  │  Audio   │  │
+                    │  │ 160x144 │  │ Handler │  │  Output  │  │
+                    │  └─────────┘  └─────────┘  └──────────┘  │
+                    └──────────────────────────────────────────┘
 ```
 
 ### Especificações Técnicas
@@ -226,7 +149,7 @@ Desenvolver um emulador funcional do Game Boy capaz de executar ROMs comerciais 
 | ROM Bank 0 | 0x0000-0x3FFF | 16KB | Código fixo do cartucho |
 | ROM Bank N | 0x4000-0x7FFF | 16KB | Código comutável (MBC) |
 | VRAM | 0x8000-0x9FFF | 8KB | Tiles e mapas de fundo |
-| External RAM | 0xA000-0xBFFF | 8KB | RAM do cartucho (battery) |
+| External RAM | 0xA000-0xBFFF | 8KB | RAM do cartucho (bateria) |
 | WRAM | 0xC000-0xDFFF | 8KB | Working RAM |
 | Echo RAM | 0xE000-0xFDFF | - | Espelho da WRAM |
 | OAM | 0xFE00-0xFE9F | 160B | Sprite Attribute Table |
@@ -255,13 +178,13 @@ Desenvolver um emulador funcional do Game Boy capaz de executar ROMs comerciais 
 ## 🛠️ Tecnologias Utilizadas
 
 ### Linguagens e Frameworks
-- **Java 21** (LTS) - Linguagem principal
+- **Java 25** - Linguagem de programação
 - **Java Swing** - Interface gráfica
 - **Java Sound API** - Processamento de áudio
 - **JInput 2.0.9** - Suporte a gamepads
 
 ### Ferramentas de Desenvolvimento
-- **Gradle 8.11.1** - Build automation
+- **Gradle 9.2.1** - Build automation
 - **Git** - Controle de versão
 - **VS Code / IntelliJ IDEA** - IDEs
 
@@ -280,7 +203,7 @@ Desenvolver um emulador funcional do Game Boy capaz de executar ROMs comerciais 
 
 Baixe a versão mais recente do instalador Windows diretamente:
 
-➡️ **[Download GameBoyEmulator-{version}.exe](https://github.com/hugorsgarcia/gbemulator/releases/latest)**
+➡️ **[Download GameBoyEmulator-1.0.0.exe](https://github.com/hugorsgarcia/gbemulator/releases/latest)**
 
 **Requisitos:**
 - Windows 10 ou superior
@@ -298,6 +221,12 @@ Se preferir compilar o projeto você mesmo, siga as instruções abaixo.
 
 ---
 
+## 🔧 Instalação
+
+### Pré-requisitos
+
+- **Java JDK 25** ou superior
+- **Gradle 9.2.1** (incluído via wrapper)
 
 ### Passo a Passo
 
@@ -329,12 +258,18 @@ cd gbemulator
 ```bash
 .\gradlew.bat jar
 ```
-O JAR será gerado em `build/libs/gbemulator-2.0.jar`
+O JAR será gerado em `build/libs/gbemulator-1.0.0.jar`
 
 Execute com:
 ```bash
-java -jar build/libs/gbemulator-2.0.jar
+java -jar build/libs/gbemulator-1.0.0.jar
 ```
+
+### Gerando Instalador Windows (.exe)
+```bash
+.\gradlew.bat jpackageInstaller
+```
+O instalador será gerado em `build/installer/GameBoyEmulator-1.0.0.exe`
 
 ---
 
@@ -405,13 +340,35 @@ while (running) {
 
 ### Precisão de Timing
 
-A versão 2.0 implementa **timing ciclo-a-ciclo** para máxima precisão:
+O emulador implementa **timing ciclo-a-ciclo** para máxima precisão:
 
 - **CPU**: Cada instrução consome T-states exatos conforme especificação
 - **PPU**: Modos OAM (80), Drawing (172-289), H-Blank e V-Blank sincronizados
 - **APU**: Frame sequencer opera a 512 Hz (8192 T-states)
 - **Timer**: DIV incrementa a cada 256 T-states
 
+### Precisão da PPU
+
+#### Timing Ciclo-a-Ciclo
+- Modo 2 (OAM Scan): 80 ciclos fixos
+- Modo 3 (Drawing): 172-289 ciclos variáveis baseado em:
+  - Número de sprites visíveis (+11 ciclos por sprite)
+  - Scroll horizontal SCX (+0 a 7 ciclos)
+  - Window ativa (+6 ciclos)
+- Modo 0 (H-Blank): resto até 456 ciclos
+- Modo 1 (V-Blank): 4560 ciclos (10 linhas)
+
+#### Modos de Renderização
+
+**Modo Tradicional (Padrão - Recomendado)**
+- Renderização por scanline completa
+- Melhor performance
+- Compatível com 95%+ dos jogos
+
+**Modo Pixel FIFO (Opcional)**
+- Renderização pixel a pixel
+- Efeitos mid-scanline
+- Máxima precisão
 
 ---
 
@@ -428,7 +385,6 @@ A versão 2.0 implementa **timing ciclo-a-ciclo** para máxima precisão:
 | Kirby's Dream Land | ✅ Perfeito | 100% funcional |
 | Dr. Mario | ✅ Perfeito | 100% funcional |
 
-
 ### Métricas de Qualidade
 
 - **Linhas de Código**: ~8.500
@@ -437,13 +393,13 @@ A versão 2.0 implementa **timing ciclo-a-ciclo** para máxima precisão:
 - **Taxa de Compatibilidade**: > 95% dos jogos comerciais
 
 ---
----
 
 ## 👨‍💻 Autor
 
 **Hugo Garcia**  
-Desenvolvedor Full Stack | Entusiasta de Emulação | Cientista da computação
-📧 Email: [seu-email@exemplo.com](mailto:hhugokta@hotmail.com)  
+Desenvolvedor Full Stack | Entusiasta de Emulação | Cientista da Computação
+
+📧 Email: [hhugokta@hotmail.com](mailto:hhugokta@hotmail.com)  
 🔗 GitHub: [@hugorsgarcia](https://github.com/hugorsgarcia)  
 💼 LinkedIn: [Hugo Garcia](https://www.linkedin.com/in/hugorsgarcia/)
 
@@ -453,7 +409,6 @@ Desenvolvedor Full Stack | Entusiasta de Emulação | Cientista da computação
 
 Este projeto não seria possível sem:
 
-- **Prof. [Nome do Orientador]** - Orientação e suporte acadêmico
 - **Comunidade GBDev** - Documentação técnica
 - **Pan Docs** - Referência do hardware Game Boy
 - **Blargg & Gekkio** - Testes de ROMs
@@ -483,8 +438,6 @@ IMPORTANTE: ROMs de jogos comerciais não são fornecidas e devem ser obtidas
 legalmente. Este emulador é apenas para uso com ROMs de sua propriedade.
 ```
 
-⚠️ **Disclaimer**: Este projeto é puramente educacional. O autor não se responsabiliza pelo uso indevido do software ou violação de direitos autorais de ROMs comerciais.
-
 ---
 
 ## 📚 Referências
@@ -505,6 +458,6 @@ legalmente. Este emulador é apenas para uso com ROMs de sua propriedade.
 
 **Desenvolvido com ❤️ e ☕ por Hugo Garcia**
 
-[⬆ Voltar ao topo](#-game-boy-emulator)
+[⬆ Voltar ao topo](#-emulador-de-game-boy-em-java)
 
 </div>
